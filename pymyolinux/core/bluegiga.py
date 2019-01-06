@@ -6,7 +6,6 @@ from pymyolinux.core.handlers import *
 
 class BlueGigaProtocol():
 
-    BLED112_BAUD_RATE = 115200
 
     # on_busy = BGAPIEvent()
     # on_idle = BGAPIEvent()
@@ -14,26 +13,53 @@ class BlueGigaProtocol():
     # on_before_tx_command = BGAPIEvent()
     # on_tx_command_complete = BGAPIEvent()
 
+    # Configurable
+    debug = True
+
+    # By default the BGAPI protocol assumes that UART flow control (RTS/CTS) is used to ensure reliable data
+    # transmission and to prevent lost data because of buffer overflows.
+    use_rts_cts         = True
+    BLED112_BAUD_RATE   = 115200
+
+    # Non-empty events
+    ble_evt_gap_scan_response       = Event()
+    ble_rsp_gap_connect_direct      = Event()
+    ble_evt_connection_disconnected = Event()
+    ble_evt_connection_status       = Event()
+
+    # Empty events
+    ble_rsp_gap_set_mode            = Event()
+    ble_rsp_connection_disconnect   = Event()
+    ble_rsp_gap_end_procedure       = Event()
+    ble_rsp_gap_discover            = Event()
+
+    # Non-configurable:
     bgapi_rx_buffer = b""
     bgapi_rx_expected_length = 0
     busy = False
-    packet_mode = False
-    debug = True
-
-    ble_evt_gap_scan_response   = Event()
-    ble_rsp_gap_connect_direct  = Event()
+    disconnecting = False
 
     def __init__(self, com_port):
-        self.ser = serial.Serial(port=com_port, baudrate=self.BLED112_BAUD_RATE
-                                    , dsrdtr=1
-                                 )
+
+        self.ser            = serial.Serial(port=com_port, baudrate=self.BLED112_BAUD_RATE, rtscts=self.use_rts_cts)
+        self.packet_mode    = not self.use_rts_cts
 
         # Filled by event handlers
-        self.myo_addresses  = []
+        self.myo_devices    = []
         self.connection     = None
 
-        self.ble_evt_gap_scan_response  += add_myo_address
-        self.ble_rsp_gap_connect_direct += add_connection
+        # Event handlers
+        self.ble_evt_gap_scan_response          += add_myo_device
+        self.ble_evt_connection_status          += add_connection
+        self.ble_evt_connection_disconnected    += device_disconnected
+
+        # Empty handlers (solely to increment event fire count)
+        empty_handler_events = [self.ble_rsp_gap_set_mode, self.ble_rsp_connection_disconnect,
+                                    self.ble_rsp_gap_end_procedure, self.ble_rsp_gap_discover,
+                                    self.ble_rsp_gap_connect_direct]
+
+        for empty_event in empty_handler_events:
+            empty_event += empty_handler
 
     def send_command(self, packet):
         if self.packet_mode: packet = chr(len(packet) & 0xFF) + packet
@@ -52,6 +78,10 @@ class BlueGigaProtocol():
             self.check_activity(time_left)
 
     def read_incoming_conditional(self, event, timeout=2):
+        if self.get_event_count(event) > 0:
+            self.__eventcounter__[event] = 0
+            return True
+
         start_time = time.time()
         while (time.time() - start_time) < timeout:
             self.busy   = True
@@ -59,7 +89,9 @@ class BlueGigaProtocol():
             self.check_activity(time_left)
 
             if self.get_event_count(event) > 0:
-                break
+                self.__eventcounter__[event] = 0
+                return True
+        return False
 
     def get_event_count(self, event):
         if hasattr(self, "__eventcounter__"):
@@ -200,10 +232,17 @@ class BlueGigaProtocol():
                 #         self.ble_rsp_attributes_user_read_response({  })
                 #     elif packet_command == 4: # ble_rsp_attributes_user_write_response
                 #         self.ble_rsp_attributes_user_write_response({  })
-                # elif packet_class == 3:
-                #     if packet_command == 0: # ble_rsp_connection_disconnect
-                #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                #         self.ble_rsp_connection_disconnect({ 'connection': connection, 'result': result })
+                if packet_class == 3:
+                    if packet_command == 0: # ble_rsp_connection_disconnect
+                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        if result != disconnect_procedure_started:
+                            if self.debug:
+                                print("Failed to start disconnect procedure for connection {}.".format(connection))
+                        else:
+                            self.disconnecting = True
+                            if self.debug:
+                                print("Started disconnect procedure for connection {}.".format(connection))
+                        self.ble_rsp_connection_disconnect(**{ 'connection': connection, 'result': result })
                 #     elif packet_command == 1: # ble_rsp_connection_get_rssi
                 #         connection, rssi = struct.unpack('<Bb', self.bgapi_rx_payload[:2])
                 #         self.ble_rsp_connection_get_rssi({ 'connection': connection, 'rssi': rssi })
@@ -285,21 +324,33 @@ class BlueGigaProtocol():
                 #         self.ble_rsp_sm_get_bonds({ 'bonds': bonds })
                 #     elif packet_command == 6: # ble_rsp_sm_set_oob_data
                 #         self.ble_rsp_sm_set_oob_data({  })
-                # elif packet_class == 6:
+                elif packet_class == 6:
                 #     if packet_command == 0: # ble_rsp_gap_set_privacy_flags
                 #         self.ble_rsp_gap_set_privacy_flags({  })
-                #     elif packet_command == 1: # ble_rsp_gap_set_mode
-                #         result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
-                #         self.ble_rsp_gap_set_mode({ 'result': result })
-                #     elif packet_command == 2: # ble_rsp_gap_discover
-                #         result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
-                #         self.ble_rsp_gap_discover({ 'result': result })
-                if packet_command == 3: # ble_rsp_gap_connect_direct
-                    result, connection_handle = struct.unpack('<HB', self.bgapi_rx_payload[:3])
-                    self.ble_rsp_gap_connect_direct(**{ 'result': result, 'connection_handle': connection_handle })
-                #     elif packet_command == 4: # ble_rsp_gap_end_procedure
-                #         result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
-                #         self.ble_rsp_gap_end_procedure({ 'result': result })
+                    if packet_command == 1: # ble_rsp_gap_set_mode
+                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        if result != GAP_set_mode_success:
+                            raise RuntimeError("Failed to set GAP mode.")
+                        else:
+                            if self.debug:
+                                print("Successfully set GAP mode.")
+                        self.ble_rsp_gap_set_mode(**{ 'result': result })
+                    elif packet_command == 2: # ble_rsp_gap_discover
+                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        if result != GAP_start_procedure_success:
+                            raise RuntimeError("Failed to start GAP discover procedure.")
+                        self.ble_rsp_gap_discover(**{ 'result': result })
+                    elif packet_command == 3: # ble_rsp_gap_connect_direct
+                        result, connection_handle = struct.unpack('<HB', self.bgapi_rx_payload[:3])
+                        if result != GAP_start_procedure_success:
+                            raise RuntimeError("Failed to start GAP connection procedure.")
+                        self.ble_rsp_gap_connect_direct(**{ 'result': result, 'connection_handle': connection_handle })
+                    elif packet_command == 4: # ble_rsp_gap_end_procedure
+                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        if result != GAP_end_procedure_success:
+                            if self.debug:
+                                print("Failed to end GAP procedure.")
+                        self.ble_rsp_gap_end_procedure(**{ 'result': result })
                 #     elif packet_command == 5: # ble_rsp_gap_connect_selective
                 #         result, connection_handle = struct.unpack('<HB', self.bgapi_rx_payload[:3])
                 #         self.ble_rsp_gap_connect_selective({ 'result': result, 'connection_handle': connection_handle })
@@ -422,11 +473,12 @@ class BlueGigaProtocol():
                 #     elif packet_command == 2: # ble_evt_attributes_status
                 #         handle, flags = struct.unpack('<HB', self.bgapi_rx_payload[:3])
                 #         self.ble_evt_attributes_status({ 'handle': handle, 'flags': flags })
-                # elif packet_class == 3:
-                #     if packet_command == 0: # ble_evt_connection_status
-                #         connection, flags, address, address_type, conn_interval, timeout, latency, bonding = struct.unpack('<BB6sBHHHB', self.bgapi_rx_payload[:16])
-                #         address = address
-                #         self.ble_evt_connection_status({ 'connection': connection, 'flags': flags, 'address': address, 'address_type': address_type, 'conn_interval': conn_interval, 'timeout': timeout, 'latency': latency, 'bonding': bonding })
+                if packet_class == 3:
+                    if packet_command == 0: # ble_evt_connection_status
+                        connection, flags, address, address_type, conn_interval, timeout, latency, bonding = struct.unpack('<BB6sBHHHB', self.bgapi_rx_payload[:16])
+                        args = { 'connection': connection, 'flags': flags, 'address': address, 'address_type': address_type, 'conn_interval': conn_interval, 'timeout': timeout, 'latency': latency, 'bonding': bonding }
+                        print("Connected to a deice with the following parameters:\n{}".format(args))
+                        self.ble_evt_connection_status(**args)
                 #     elif packet_command == 1: # ble_evt_connection_version_ind
                 #         connection, vers_nr, comp_id, sub_vers_nr = struct.unpack('<BBHH', self.bgapi_rx_payload[:6])
                 #         self.ble_evt_connection_version_ind({ 'connection': connection, 'vers_nr': vers_nr, 'comp_id': comp_id, 'sub_vers_nr': sub_vers_nr })
@@ -438,9 +490,9 @@ class BlueGigaProtocol():
                 #         connection, data_len = struct.unpack('<BB', self.bgapi_rx_payload[:2])
                 #         data_data = self.bgapi_rx_payload[2:]
                 #         self.ble_evt_connection_raw_rx({ 'connection': connection, 'data': data_data })
-                #     elif packet_command == 4: # ble_evt_connection_disconnected
-                #         connection, reason = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                #         self.ble_evt_connection_disconnected({ 'connection': connection, 'reason': reason })
+                    elif packet_command == 4: # ble_evt_connection_disconnected
+                        connection, reason = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        self.ble_evt_connection_disconnected(**{ 'connection': connection, 'reason': reason })
                 # elif packet_class == 4:
                 #     if packet_command == 0: # ble_evt_attclient_indicated
                 #         connection, attrhandle = struct.unpack('<BH', self.bgapi_rx_payload[:3])
@@ -486,7 +538,7 @@ class BlueGigaProtocol():
                 #         bond, keysize, mitm, keys = struct.unpack('<BBBB', self.bgapi_rx_payload[:4])
                 #         self.ble_evt_sm_bond_status({ 'bond': bond, 'keysize': keysize, 'mitm': mitm, 'keys': keys })
 
-                if packet_class == 6:
+                elif packet_class == 6:
                     if packet_command == 0: # ble_evt_gap_scan_response
                         rssi, packet_type, sender, address_type, bond, data_len = struct.unpack('<bB6sBBB', self.bgapi_rx_payload[:11])
                         sender = sender
