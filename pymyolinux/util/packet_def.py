@@ -15,15 +15,21 @@ def get_full_uuid(short_uuid):
 class HW_Services(Enum):
     ControlService          = b"\x00\x01" # Myo info service (advertising packets)
 
-    IMUDataCharacteristic   = b"\x04\x02"   # "Client Characteristic Configuration Descriptor" for IMU data
-                                            #   -> Write to this attribute to enable IMU readings.
+    IMUDataCharacteristic   = b"\x04\x02"   # Notify only characteristic for IMU data
 
     CommandCharacteristic   = b"\x04\x01"   # A write only attribute to issue commands (such as setting Myo mode).
 
+    EmgData0Characteristic  = b"\x01\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData1Characteristic  = b"\x02\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData2Characteristic  = b"\x03\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData3Characteristic  = b"\x04\x05"   # Raw EMG data. Notify-only characteristic.
 
 #
 # BLE Command definitions
 #
+disable_notifications   = b"\x00\x00"
+enable_notifications    = b"\x01\x00"
+
 class GAP_Discoverable_Modes(Enum):
     gap_non_discoverable        = 0
     gap_limited_discoverable    = 1

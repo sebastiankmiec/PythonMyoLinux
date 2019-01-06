@@ -44,6 +44,58 @@ class MyoDongle():
         self.emg_enabled    = False
 
     def clear_state(self, timeout=2):
+
+        #
+        # Disable IMU readings
+        #
+        if self.imu_enabled:
+            # Unsubscribe
+            self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                          self.handles["imu_descriptor"],
+                                                                          disable_notifications),
+                               BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            if not resp_received:
+                raise RuntimeError("GATT procedure (write completion to CCCD) response timed out.")
+
+        #
+        # Disable EMG readings
+        #
+        if self.emg_enabled:
+            for emg_num in range(4):
+                self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                              self.handles["emg_descriptor_" +
+                                                                                           str(emg_num)],
+                                                                              disable_notifications),
+                                   BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+                resp_received = self.ble.read_incoming_conditional(
+                    BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+                if not resp_received:
+                    raise RuntimeError("GATT procedure (write completion to CCCD, emg {}) response timed out.".
+                                       format(emg_num))
+
+        if self.imu_enabled or self.emg_enabled:
+            mode_command_payload = struct.pack('<5B', Myo_Commands.myohw_command_set_mode.value,
+                                               3,  # Payload size
+                                               EMG_Modes.myohw_emg_mode_none.value,
+                                               IMU_Modes.myohw_imu_mode_none.value,
+                                               Classifier_Modes.myohw_classifier_mode_disabled.value)
+
+            self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                          self.handles["command_characteristic"],
+                                                                          mode_command_payload),
+                               BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            if not resp_received:
+                raise RuntimeError("GATT procedure (write completion) response timed out.")
+
+        self.emg_enabled = False
+        self.imu_enabled = False
+
+
         # Disable dongle advertisement
         self.transmit_wait(self.ble.ble_cmd_gap_set_mode(GAP_Discoverable_Modes.gap_non_discoverable.value,
                                                             GAP_Connectable_Modes.gap_non_connectable.value),
@@ -138,16 +190,16 @@ class MyoDongle():
                             ---> myfunc_data_handler_123(orient_w, orient_x, orient_y, orient_z, accel_1,
                                                                 accel_2, accely_3, gyro_1, gyro_2, gyro_3)
         """
+        if not self.imu_enabled:
+            raise RuntimeError("IMU readings are not enabled.")
         self.ble.imu_event += handler
 
     def enable_imu_readings(self, timeout=2):
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
-        if len(self.ble.imu_event._getfunctionlist()) == 0:
-            raise RuntimeError("No event handlers given to imu_event.")
 
         #
-        # Need to be able to activate notifcations via writing to descriptor handles
+        # Need to be able to activate notifications via writing to descriptor handles
         #
         if len(self.descriptors.keys()) == 0:
             self.discover_primary_services()
@@ -156,7 +208,8 @@ class MyoDongle():
             self.fill_handles()
 
         self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
-                                                                        self.handles["imu_descriptor"], b"\x01\x00"),
+                                                                        self.handles["imu_descriptor"],
+                                                                        enable_notifications),
                                 BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
         resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
@@ -186,12 +239,87 @@ class MyoDongle():
 
         self.imu_enabled = True
 
+    def add_emg_handler(self, handler):
+        """
+            On receiving an EMG data packet.
+        :param handler: A function to be called with the following signature:
+                            ---> myfunc_data_handler_123(emg_1, emg_2, emg_3, emg_4, emg_5, emg_6, emg_7, emg_8)
+        """
+        if not self.emg_enabled:
+            raise RuntimeError("EMG readings are not enabled.")
+        self.ble.emg_event += handler
+
+    def enable_emg_readings(self):
+        if self.ble.connection is None:
+            raise RuntimeError("BLE connection is None.")
+
+        #
+        # Need to be able to activate notifications via writing to descriptor handles
+        #
+        if len(self.descriptors.keys()) == 0:
+            self.discover_primary_services()
+            if len(self.ble.attributes_found) == 0:
+                raise RuntimeError("No attributes found, ensure discover_primary_services() was called.")
+            self.fill_handles()
+
+        for emg_num in range(4):
+            self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                            self.handles["emg_descriptor_" +
+                                                                                         str(emg_num)],
+                                                                            enable_notifications),
+                                    BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            if not resp_received:
+                raise RuntimeError("GATT procedure (write completion to CCCD, emg {}) response timed out.".
+                                        format(emg_num))
+
+        #
+        # Need to go one step further, by issuing a command to set "Myo device mode"
+        #
+        imu_mode                = IMU_Modes.myohw_imu_mode_send_data.value if self.imu_enabled else \
+                                    IMU_Modes.myohw_imu_mode_none.value
+
+        mode_command_payload    = struct.pack('<5B', Myo_Commands.myohw_command_set_mode.value,
+                                                3, # Payload size
+                                                EMG_Modes.myohw_emg_mode_send_emg.value, imu_mode,
+                                                Classifier_Modes.myohw_classifier_mode_disabled.value)
+
+        self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                        self.handles["command_characteristic"],
+                                                                        mode_command_payload),
+                           BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        if not resp_received:
+            raise RuntimeError("GATT procedure (write completion) response timed out.")
+
+        self.emg_enabled        = True
+
+    def add_joint_emg_imu_handler(self, handler):
+        """
+              On receiving an EMG data packet, use the latest IMU packet.
+              :param handler: A function to be called with the following signature:
+                                  ---> myfunc_data_handler_123(emg_1, emg_2, emg_3, emg_4, emg_5, emg_6, emg_7, emg_8,
+                                                                        orient_w, orient_x, orient_y, orient_z, accel_1,
+                                                                        accel_2, accel_3, gyro_1, gyro_2, gyro_3)
+        """
+        if not self.imu_enabled:
+            raise RuntimeError("IMU readings are not enabled.")
+        if not self.emg_enabled:
+            raise RuntimeError("EMG readings are not enabled.")
+        self.ble.joint_emg_imu_event += handler
+
     def scan_for_data_packets(self, time=10):
         self.ble.read_incoming(time)
 
     def fill_handles(self):
         imu_uuid        = get_full_uuid(HW_Services.IMUDataCharacteristic.value)
         command_uuid    = get_full_uuid(HW_Services.CommandCharacteristic.value)
+        emg_uuid_0      = get_full_uuid(HW_Services.EmgData0Characteristic.value)
+        emg_uuid_1      = get_full_uuid(HW_Services.EmgData1Characteristic.value)
+        emg_uuid_2      = get_full_uuid(HW_Services.EmgData2Characteristic.value)
+        emg_uuid_3      = get_full_uuid(HW_Services.EmgData3Characteristic.value)
 
         for attribute in self.ble.attributes_found:
             if attribute["uuid"].endswith(imu_uuid):
@@ -203,7 +331,29 @@ class MyoDongle():
             elif attribute["uuid"].endswith(command_uuid):
                 self.handles["command_characteristic"] = attribute["chrhandle"]
 
+            elif attribute["uuid"].endswith(emg_uuid_0):
+                self.ble.emg_handle_0               = attribute["chrhandle"]
+                self.handles["emg_descriptor_0"]    = attribute["chrhandle"] + 1
+            elif attribute["uuid"].endswith(emg_uuid_1):
+                self.ble.emg_handle_1               = attribute["chrhandle"]
+                self.handles["emg_descriptor_1"]    = attribute["chrhandle"] + 1
+            elif attribute["uuid"].endswith(emg_uuid_2):
+                self.ble.emg_handle_2               = attribute["chrhandle"]
+                self.handles["emg_descriptor_2"]    = attribute["chrhandle"] + 1
+            elif attribute["uuid"].endswith(emg_uuid_3):
+                self.ble.emg_handle_3               = attribute["chrhandle"]
+                self.handles["emg_descriptor_3"]    = attribute["chrhandle"] + 1
+
         if "imu_descriptor" not in self.handles:
             raise RuntimeError("Unable to find IMU attribute, in device's GATT database.")
         if "command_characteristic" not in self.handles:
             raise RuntimeError("Unable to find command attribute, in device's GATT database.")
+        if "emg_descriptor_0" not in self.handles:
+            raise RuntimeError("Unable to find EMG attribute 0, in device's GATT database.")
+        if "emg_descriptor_1" not in self.handles:
+            raise RuntimeError("Unable to find EMG attribute 1, in device's GATT database.")
+        if "emg_descriptor_2" not in self.handles:
+            raise RuntimeError("Unable to find EMG attribute 2, in device's GATT database.")
+        if "emg_descriptor_3" not in self.handles:
+            raise RuntimeError("Unable to find EMG attribute 3, in device's GATT database.")
+

@@ -6,13 +6,48 @@ import struct
 #######
 
 def on_receive_attribute_value(sender_obj, connection, atthandle, type, value):
+
+    #
+    # IMU
+    #
     if atthandle == sender_obj.imu_handle:
-        orient_w, orient_x, orient_y, orient_z, accel_1, accel_2, accely_3, gyro_1, gyro_2, gyro_3 =\
+        orient_w, orient_x, orient_y, orient_z, accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3 =\
             struct.unpack('<10h', value)
 
+        sender_obj.current_imu_read = {"orient_w" : orient_w, "orient_x": orient_x, "orient_y": orient_y,
+                                        "orient_z": orient_z, "accel_1": accel_1, "accel_2": accel_2,
+                                        "accel_3": accel_3, "gyro_1": gyro_1,
+                                        "gyro_2": gyro_2, "gyro_3": gyro_3}
+
+        # Trigger IMU event
         sender_obj.imu_event(orient_w = orient_w, orient_x = orient_x, orient_y = orient_y, orient_z = orient_z,
-                                accel_1 = accel_1, accel_2 = accel_2, accely_3 = accely_3, gyro_1 =gyro_1,
+                                accel_1 = accel_1, accel_2 = accel_2, accel_3 = accel_3, gyro_1 = gyro_1,
                                 gyro_2 = gyro_2, gyro_3 = gyro_3)
+
+    #
+    # EMG
+    #
+    elif ((atthandle == sender_obj.emg_handle_0) or (atthandle == sender_obj.emg_handle_1) or
+          (atthandle == sender_obj.emg_handle_2) or (atthandle == sender_obj.emg_handle_3)):
+
+        sample_0_1, sample_0_2, sample_0_3, sample_0_4, sample_0_5, sample_0_6, sample_0_7, sample_0_8, \
+            sample_1_1, sample_1_2, sample_1_3, sample_1_4, sample_1_5, sample_1_6, sample_1_7, sample_1_8\
+                = struct.unpack('<16b', value)
+
+        # Trigger two EMG events
+        sender_obj.emg_event(emg_1 = sample_0_1, emg_2 = sample_0_2, emg_3 = sample_0_3, emg_4 = sample_0_4,
+                                emg_5 = sample_0_5, emg_6 = sample_0_6, emg_7 = sample_0_7, emg_8 = sample_0_8)
+        sender_obj.emg_event(emg_1 = sample_1_1, emg_2 = sample_1_2, emg_3 = sample_1_3, emg_4 = sample_1_4,
+                                emg_5 = sample_1_5, emg_6 = sample_1_6, emg_7 = sample_1_7, emg_8 = sample_1_8)
+
+        # Trigger two joint IMU/EMG events:
+        sender_obj.joint_emg_imu_event(emg_1 = sample_0_1, emg_2 = sample_0_2, emg_3 = sample_0_3, emg_4 = sample_0_4,
+                                            emg_5 = sample_0_5, emg_6 = sample_0_6, emg_7 = sample_0_7,
+                                            emg_8 = sample_0_8, **sender_obj.current_imu_read)
+        sender_obj.joint_emg_imu_event(emg_1 = sample_1_1, emg_2 = sample_1_2, emg_3 = sample_1_3, emg_4 = sample_1_4,
+                                            emg_5 = sample_1_5, emg_6 = sample_1_6, emg_7 = sample_1_7,
+                                            emg_8 = sample_1_8, **sender_obj.current_imu_read)
+
 
 #######
 ###     (BLE Response) Handlers used by BlueGigaProtocol

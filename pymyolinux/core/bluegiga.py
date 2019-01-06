@@ -24,8 +24,10 @@ class BlueGigaProtocol():
     #
     # Myo device specific events
     #
-    emg_event = Event("On receiving an EMG data packet from the Myo device.", fire_type=0)
-    imu_event = Event("On receiving an IMU data packet from the Myo device.", fire_type=0)
+    emg_event           = Event("On receiving an EMG data packet from the Myo device.", fire_type=0)
+    imu_event           = Event("On receiving an IMU data packet from the Myo device.", fire_type=0)
+    joint_emg_imu_event = Event("On receiving an IMU data packet from the Myo device. Use latest IMU event.",
+                                    fire_type=0)
 
     # Non-empty events
     ble_evt_gap_scan_response                   = Event()
@@ -59,14 +61,19 @@ class BlueGigaProtocol():
         self.ser            = serial.Serial(port=com_port, baudrate=self.BLED112_BAUD_RATE, rtscts=self.use_rts_cts)
         self.packet_mode    = not self.use_rts_cts
 
-        # Filled by user
+        # Filled by user of this object
         self.imu_handle     = None
+        self.emg_handle_0   = None
+        self.emg_handle_1   = None
+        self.emg_handle_2   = None
+        self.emg_handle_3   = None
 
         # Filled by event handlers
         self.myo_devices        = []
         self.services_found     = []
         self.attributes_found   = []
         self.connection         = None
+        self.current_imu_read   = None
 
         # Event handlers
         self.ble_evt_gap_scan_response                  += add_myo_device
@@ -306,7 +313,8 @@ class BlueGigaProtocol():
                     elif packet_command == 3: # ble_rsp_attclient_find_information
                         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                         if result != find_info_success:
-                            raise("Error using find information command.")
+                            if self.debug:
+                                print("Error using find information command.")
                         self.ble_rsp_attclient_find_information(**{ 'connection': connection, 'result': result })
                 #     elif packet_command == 4: # ble_rsp_attclient_read_by_handle
                 #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
@@ -506,7 +514,7 @@ class BlueGigaProtocol():
                     if packet_command == 0: # ble_evt_connection_status
                         connection, flags, address, address_type, conn_interval, timeout, latency, bonding = struct.unpack('<BB6sBHHHB', self.bgapi_rx_payload[:16])
                         args = { 'connection': connection, 'flags': flags, 'address': address, 'address_type': address_type, 'conn_interval': conn_interval, 'timeout': timeout, 'latency': latency, 'bonding': bonding }
-                        print("Connected to a deice with the following parameters:\n{}".format(args))
+                        print("Connected to a device with the following parameters:\n{}".format(args))
                         self.ble_evt_connection_status(**args)
                 #     elif packet_command == 1: # ble_evt_connection_version_ind
                 #         connection, vers_nr, comp_id, sub_vers_nr = struct.unpack('<BBHH', self.bgapi_rx_payload[:6])
