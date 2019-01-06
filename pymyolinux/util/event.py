@@ -4,8 +4,15 @@
 
 class Event(object):
 
-    def __init__(self, doc=None):
-        self.__doc__ = doc
+    pass_sender_obj = 1
+
+    def __init__(self, doc=None, fire_type=pass_sender_obj):
+        """
+        :param doc: Documentation
+        :param fire_type: 0: Pass sender object, 1: Do not.
+        """
+        self.__doc__    = doc
+        self.fire_type  = fire_type
 
     def __get__(self, obj, objtype=None):
         if obj is None:
@@ -73,7 +80,10 @@ class EventHandler(object):
             event_counter[self.event]  = 1
 
         for func in self._getfunctionlist():
-            func(self.obj, **kwargs)
+            if self.event.fire_type == self.event.pass_sender_obj:
+                func(self.obj, **kwargs)
+            else:
+                func(**kwargs)
 
     __iadd__ = add
     __isub__ = remove

@@ -14,24 +14,39 @@ class BlueGigaProtocol():
     # on_tx_command_complete = BGAPIEvent()
 
     # Configurable
-    debug = True
+    debug = False
 
     # By default the BGAPI protocol assumes that UART flow control (RTS/CTS) is used to ensure reliable data
     # transmission and to prevent lost data because of buffer overflows.
     use_rts_cts         = True
     BLED112_BAUD_RATE   = 115200
 
+    #
+    # Myo device specific events
+    #
+    emg_event = Event("On receiving an EMG data packet from the Myo device.", fire_type=0)
+    imu_event = Event("On receiving an IMU data packet from the Myo device.", fire_type=0)
+
     # Non-empty events
-    ble_evt_gap_scan_response       = Event()
-    ble_rsp_gap_connect_direct      = Event()
-    ble_evt_connection_disconnected = Event()
-    ble_evt_connection_status       = Event()
+    ble_evt_gap_scan_response                   = Event()
+    ble_evt_connection_disconnected             = Event()
+    ble_evt_connection_status                   = Event()
+    ble_evt_attclient_group_found               = Event()
+    ble_evt_attclient_procedure_completed       = Event()
+    ble_evt_attclient_find_information_found    = Event()
+
+    # Non-empty (response) events
 
     # Empty events
-    ble_rsp_gap_set_mode            = Event()
-    ble_rsp_connection_disconnect   = Event()
-    ble_rsp_gap_end_procedure       = Event()
-    ble_rsp_gap_discover            = Event()
+    ble_rsp_gap_set_mode                    = Event()
+    ble_rsp_connection_disconnect           = Event()
+    ble_rsp_gap_end_procedure               = Event()
+    ble_rsp_gap_discover                    = Event()
+    ble_rsp_attclient_read_by_group_type    = Event()
+    ble_rsp_gap_connect_direct              = Event()
+    ble_rsp_attclient_find_information      = Event()
+    ble_rsp_attclient_attribute_write       = Event()
+    ble_evt_attclient_attribute_value       = Event()
 
     # Non-configurable:
     bgapi_rx_buffer = b""
@@ -44,19 +59,29 @@ class BlueGigaProtocol():
         self.ser            = serial.Serial(port=com_port, baudrate=self.BLED112_BAUD_RATE, rtscts=self.use_rts_cts)
         self.packet_mode    = not self.use_rts_cts
 
+        # Filled by user
+        self.imu_handle     = None
+
         # Filled by event handlers
-        self.myo_devices    = []
-        self.connection     = None
+        self.myo_devices        = []
+        self.services_found     = []
+        self.attributes_found   = []
+        self.connection         = None
 
         # Event handlers
-        self.ble_evt_gap_scan_response          += add_myo_device
-        self.ble_evt_connection_status          += add_connection
-        self.ble_evt_connection_disconnected    += device_disconnected
+        self.ble_evt_gap_scan_response                  += add_myo_device
+        self.ble_evt_connection_status                  += add_connection
+        self.ble_evt_connection_disconnected            += device_disconnected
+        self.ble_evt_attclient_group_found              += add_service_found
+        self.ble_evt_attclient_procedure_completed      += service_finding_complete
+        self.ble_evt_attclient_find_information_found   += add_attribute_found
+        self.ble_evt_attclient_attribute_value          += on_receive_attribute_value
 
         # Empty handlers (solely to increment event fire count)
         empty_handler_events = [self.ble_rsp_gap_set_mode, self.ble_rsp_connection_disconnect,
                                     self.ble_rsp_gap_end_procedure, self.ble_rsp_gap_discover,
-                                    self.ble_rsp_gap_connect_direct]
+                                    self.ble_rsp_gap_connect_direct, self.ble_rsp_attclient_read_by_group_type,
+                                    self.ble_rsp_attclient_find_information, self.ble_rsp_attclient_attribute_write]
 
         for empty_event in empty_handler_events:
             empty_event += empty_handler
@@ -74,7 +99,7 @@ class BlueGigaProtocol():
         start_time = time.time()
         while (time.time() - start_time) < timeout:
             self.busy   = True
-            time_left       = (time.time() - start_time)
+            time_left   = timeout - (time.time() - start_time)
             self.check_activity(time_left)
 
     def read_incoming_conditional(self, event, timeout=2):
@@ -268,25 +293,29 @@ class BlueGigaProtocol():
                 #     elif packet_command == 8: # ble_rsp_connection_raw_tx
                 #         connection = struct.unpack('<B', self.bgapi_rx_payload[:1])[0]
                 #         self.ble_rsp_connection_raw_tx({ 'connection': connection })
-                # elif packet_class == 4:
+                elif packet_class == 4:
                 #     if packet_command == 0: # ble_rsp_attclient_find_by_type_value
                 #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                 #         self.ble_rsp_attclient_find_by_type_value({ 'connection': connection, 'result': result })
-                #     elif packet_command == 1: # ble_rsp_attclient_read_by_group_type
-                #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                #         self.ble_rsp_attclient_read_by_group_type({ 'connection': connection, 'result': result })
+                    if packet_command == 1: # ble_rsp_attclient_read_by_group_type
+                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        self.ble_rsp_attclient_read_by_group_type(**{ 'connection': connection, 'result': result })
                 #     elif packet_command == 2: # ble_rsp_attclient_read_by_type
                 #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                 #         self.ble_rsp_attclient_read_by_type({ 'connection': connection, 'result': result })
-                #     elif packet_command == 3: # ble_rsp_attclient_find_information
-                #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                #         self.ble_rsp_attclient_find_information({ 'connection': connection, 'result': result })
+                    elif packet_command == 3: # ble_rsp_attclient_find_information
+                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        if result != find_info_success:
+                            raise("Error using find information command.")
+                        self.ble_rsp_attclient_find_information(**{ 'connection': connection, 'result': result })
                 #     elif packet_command == 4: # ble_rsp_attclient_read_by_handle
                 #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                 #         self.ble_rsp_attclient_read_by_handle({ 'connection': connection, 'result': result })
-                #     elif packet_command == 5: # ble_rsp_attclient_attribute_write
-                #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                #         self.ble_rsp_attclient_attribute_write({ 'connection': connection, 'result': result })
+                    elif packet_command == 5: # ble_rsp_attclient_attribute_write
+                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        if result != write_success:
+                            raise("Write attempt was unsuccessful.")
+                        self.ble_rsp_attclient_attribute_write(**{ 'connection': connection, 'result': result })
                 #     elif packet_command == 6: # ble_rsp_attclient_write_command
                 #         connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                 #         self.ble_rsp_attclient_write_command({ 'connection': connection, 'result': result })
@@ -492,30 +521,35 @@ class BlueGigaProtocol():
                 #         self.ble_evt_connection_raw_rx({ 'connection': connection, 'data': data_data })
                     elif packet_command == 4: # ble_evt_connection_disconnected
                         connection, reason = struct.unpack('<BH', self.bgapi_rx_payload[:3])
-                        self.ble_evt_connection_disconnected(**{ 'connection': connection, 'reason': reason })
-                # elif packet_class == 4:
+                        if (self.connection is None) or (connection == self.connection["connection"]):
+                            self.ble_evt_connection_disconnected(**{ 'connection': connection, 'reason': reason })
+                elif packet_class == 4:
                 #     if packet_command == 0: # ble_evt_attclient_indicated
                 #         connection, attrhandle = struct.unpack('<BH', self.bgapi_rx_payload[:3])
                 #         self.ble_evt_attclient_indicated({ 'connection': connection, 'attrhandle': attrhandle })
-                #     elif packet_command == 1: # ble_evt_attclient_procedure_completed
-                #         connection, result, chrhandle = struct.unpack('<BHH', self.bgapi_rx_payload[:5])
-                #         self.ble_evt_attclient_procedure_completed({ 'connection': connection, 'result': result, 'chrhandle': chrhandle })
-                #     elif packet_command == 2: # ble_evt_attclient_group_found
-                #         connection, start, end, uuid_len = struct.unpack('<BHHB', self.bgapi_rx_payload[:6])
-                #         uuid_data = self.bgapi_rx_payload[6:]
-                #         self.ble_evt_attclient_group_found({ 'connection': connection, 'start': start, 'end': end, 'uuid': uuid_data })
+                    if packet_command == 1: # ble_evt_attclient_procedure_completed
+                        connection, result, chrhandle = struct.unpack('<BHH', self.bgapi_rx_payload[:5])
+                        if (self.connection is not None) and (connection == self.connection["connection"]):
+                            self.ble_evt_attclient_procedure_completed(**{ 'connection': connection, 'result': result, 'chrhandle': chrhandle })
+                    elif packet_command == 2: # ble_evt_attclient_group_found
+                        connection, start, end, uuid_len = struct.unpack('<BHHB', self.bgapi_rx_payload[:6])
+                        if (self.connection is not None) and (connection == self.connection["connection"]):
+                            uuid_data = self.bgapi_rx_payload[6:]
+                            self.ble_evt_attclient_group_found(**{ 'connection': connection, 'start': start, 'end': end, 'uuid': uuid_data })
                 #     elif packet_command == 3: # ble_evt_attclient_attribute_found
                 #         connection, chrdecl, value, properties, uuid_len = struct.unpack('<BHHBB', self.bgapi_rx_payload[:7])
                 #         uuid_data = self.bgapi_rx_payload[7:]
                 #         self.ble_evt_attclient_attribute_found({ 'connection': connection, 'chrdecl': chrdecl, 'value': value, 'properties': properties, 'uuid': uuid_data })
-                #     elif packet_command == 4: # ble_evt_attclient_find_information_found
-                #         connection, chrhandle, uuid_len = struct.unpack('<BHB', self.bgapi_rx_payload[:4])
-                #         uuid_data = self.bgapi_rx_payload[4:]
-                #         self.ble_evt_attclient_find_information_found({ 'connection': connection, 'chrhandle': chrhandle, 'uuid': uuid_data })
-                #     elif packet_command == 5: # ble_evt_attclient_attribute_value
-                #         connection, atthandle, type, value_len = struct.unpack('<BHBB', self.bgapi_rx_payload[:5])
-                #         value_data = self.bgapi_rx_payload[5:]
-                #         self.ble_evt_attclient_attribute_value({ 'connection': connection, 'atthandle': atthandle, 'type': type, 'value': value_data })
+                    elif packet_command == 4: # ble_evt_attclient_find_information_found
+                        connection, chrhandle, uuid_len = struct.unpack('<BHB', self.bgapi_rx_payload[:4])
+                        uuid_data = self.bgapi_rx_payload[4:]
+                        if (self.connection is not None) and (connection == self.connection["connection"]):
+                            self.ble_evt_attclient_find_information_found(**{ 'connection': connection, 'chrhandle': chrhandle, 'uuid': uuid_data })
+                    elif packet_command == 5: # ble_evt_attclient_attribute_value
+                        connection, atthandle, type, value_len = struct.unpack('<BHBB', self.bgapi_rx_payload[:5])
+                        if (self.connection is not None) and (connection == self.connection["connection"]):
+                            value_data = self.bgapi_rx_payload[5:]
+                            self.ble_evt_attclient_attribute_value(**{ 'connection': connection, 'atthandle': atthandle, 'type': type, 'value': value_data })
                 #     elif packet_command == 6: # ble_evt_attclient_read_multiple_response
                 #         connection, handles_len = struct.unpack('<BB', self.bgapi_rx_payload[:2])
                 #         handles_data = self.bgapi_rx_payload[2:]
@@ -541,7 +575,6 @@ class BlueGigaProtocol():
                 elif packet_class == 6:
                     if packet_command == 0: # ble_evt_gap_scan_response
                         rssi, packet_type, sender, address_type, bond, data_len = struct.unpack('<bB6sBBB', self.bgapi_rx_payload[:11])
-                        sender = sender
                         data_data = self.bgapi_rx_payload[11:]
                         self.ble_evt_gap_scan_response(**{ 'rssi': rssi, 'packet_type': packet_type, 'sender': sender, 'address_type': address_type, 'bond': bond, 'data': data_data })
 
