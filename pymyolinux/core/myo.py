@@ -5,6 +5,9 @@ import struct
 
 
 class MyoDongle():
+    """
+        Represents a single Myo dongle, that leverages the Bluegiga API.
+    """
 
     #
     # Connection parameters
@@ -56,7 +59,7 @@ class MyoDongle():
                                                                           disable_notifications),
                                BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
             if not resp_received:
                 raise RuntimeError("GATT procedure (write completion to CCCD) response timed out.")
 
@@ -71,7 +74,7 @@ class MyoDongle():
                                                                               disable_notifications),
                                    BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-                resp_received = self.ble.read_incoming_conditional(
+                resp_received = self.ble.read_packets_conditional(
                     BlueGigaProtocol.ble_evt_attclient_procedure_completed)
                 if not resp_received:
                     raise RuntimeError("GATT procedure (write completion to CCCD, emg {}) response timed out.".
@@ -89,7 +92,7 @@ class MyoDongle():
                                                                           mode_command_payload),
                                BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
             if not resp_received:
                 raise RuntimeError("GATT procedure (write completion) response timed out.")
 
@@ -104,7 +107,7 @@ class MyoDongle():
                                 mode_command_payload),
                                 BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
             if not resp_received:
                 raise RuntimeError("GATT procedure (write completion) response timed out.")
 
@@ -124,7 +127,7 @@ class MyoDongle():
                                     BlueGigaProtocol.ble_rsp_connection_disconnect)
             if self.ble.disconnecting:
                 # Need to wait for disconnect response
-                resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_connection_disconnected,
+                resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_connection_disconnected,
                                                                         timeout)
                 if not resp_received:
                     raise RuntimeError("Disconnect response timed out.")
@@ -137,7 +140,7 @@ class MyoDongle():
         # Scan for advertising packets
         self.transmit_wait(self.ble.ble_cmd_gap_discover(GAP_Discover_Mode.gap_discover_observation.value),
                                 BlueGigaProtocol.ble_rsp_gap_discover)
-        self.ble.read_incoming(timeout)
+        self.ble.read_packets(timeout)
 
         # Stop scanning
         self.transmit_wait(self.ble.ble_cmd_gap_end_procedure(), BlueGigaProtocol.ble_rsp_gap_end_procedure)
@@ -156,7 +159,7 @@ class MyoDongle():
                                 BlueGigaProtocol.ble_rsp_gap_connect_direct)
 
         # Need to wait for conenction response
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_connection_status, timeout)
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_connection_status, timeout)
         if not resp_received:
             raise RuntimeError("Connection response timed out.")
 
@@ -172,7 +175,7 @@ class MyoDongle():
                                                                             self.PRIMARY_SERVICE),
                                 BlueGigaProtocol.ble_rsp_attclient_read_by_group_type)
 
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed,
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed,
                                                                 timeout)
         if not resp_received:
             raise RuntimeError("GATT procedure completion response timed out.")
@@ -186,17 +189,17 @@ class MyoDongle():
                                                                             service["start"], service["end"]),
                                     BlueGigaProtocol.ble_rsp_attclient_find_information)
 
-            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed,
+            resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed,
                                                                timeout)
             if not resp_received:
                 raise RuntimeError("GATT procedure completion response timed out.")
 
     def transmit(self, packet_contents):
-        self.ble.send_command(packet_contents)
+        self.ble.transmit_packet(packet_contents)
 
     def transmit_wait(self, packet_contents, event, timeout=2):
-        self.ble.send_command(packet_contents)
-        resp_received = self.ble.read_incoming_conditional(event, timeout)
+        self.ble.transmit_packet(packet_contents)
+        resp_received = self.ble.read_packets_conditional(event, timeout)
         if not resp_received:
             raise RuntimeError("Response timed out for the transmitted command.")
 
@@ -225,7 +228,7 @@ class MyoDongle():
                                                                         enable_notifications),
                                 BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
         if not resp_received:
             raise RuntimeError("GATT procedure (write completion to CCCD) response timed out.")
 
@@ -246,7 +249,7 @@ class MyoDongle():
                                                                         mode_command_payload),
                            BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
         if not resp_received:
             raise RuntimeError("GATT procedure (write completion) response timed out.")
 
@@ -278,7 +281,7 @@ class MyoDongle():
                                                                             enable_notifications),
                                     BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
             if not resp_received:
                 raise RuntimeError("GATT procedure (write completion to CCCD, emg {}) response timed out.".
                                         format(emg_num))
@@ -299,7 +302,7 @@ class MyoDongle():
                                                                         mode_command_payload),
                            BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
         if not resp_received:
             raise RuntimeError("GATT procedure (write completion) response timed out.")
 
@@ -342,7 +345,7 @@ class MyoDongle():
                                                                       mode_command_payload),
                            BlueGigaProtocol.ble_rsp_attclient_attribute_write)
 
-        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        resp_received = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
         if not resp_received:
             raise RuntimeError("GATT procedure (write completion) response timed out.")
 
@@ -351,7 +354,7 @@ class MyoDongle():
 
 
     def scan_for_data_packets(self, time=10):
-        self.ble.read_incoming(time)
+        self.ble.read_packets(time)
 
     # Helper functions
     def check_handles(self):

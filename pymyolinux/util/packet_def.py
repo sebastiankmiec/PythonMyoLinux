@@ -24,6 +24,76 @@ class HW_Services(Enum):
     EmgData2Characteristic  = b"\x03\x05"   # Raw EMG data. Notify-only characteristic.
     EmgData3Characteristic  = b"\x04\x05"   # Raw EMG data. Notify-only characteristic.
 
+########################################################################################################################
+########################################################################################################################
+
+#
+# Bluegiga packet defintions
+#
+
+# Message / technology types
+bluetooth_resp      = 0x00
+bluetooth_event     = 0x80
+wifi_resp           = 0x08
+wifi_event          = 0x88
+packet_type_bits    = 0x88
+command_message     = 0x00
+
+packet_header_legnth    = 4
+packet_length_high_bits = 0x07
+
+class BGAPI_Classes:
+    Connection  = 0x03 # Provides access to connection management functions
+    GATT        = 0x04 # Functions to access remote devices GATT database
+    GAP         = 0X06 # GAP (Generic Access Profile) functions
+
+class GATT_Response_Commands:
+    ble_rsp_attclient_read_by_group_type = 0x01
+    ble_rsp_attclient_find_information   = 0x03
+    ble_rsp_attclient_attribute_write    = 0x05
+
+class GATT_Event_Commands:
+    ble_evt_attclient_procedure_completed       = 0x01
+    ble_evt_attclient_group_found               = 0x02
+    ble_evt_attclient_find_information_found    = 0x04
+    ble_evt_attclient_attribute_value           = 0x05
+
+class GAP_Event_Commands:
+    ble_evt_gap_scan_response = 0x00
+    ble_evt_gap_mode_changed  = 0x01
+
+class GAP_Response_Commands:
+    ble_rsp_gap_set_mode        = 0x01
+    ble_rsp_gap_discover        = 0x02
+    ble_rsp_gap_connect_direct  = 0x03
+    ble_rsp_gap_end_procedure   = 0x04
+
+# Connection (response/event) commands
+ble_rsp_connection_disconnect   = 0x00 # Response
+ble_evt_connection_status       = 0x00 # Event
+ble_evt_connection_disconnected = 0x04 # Event
+
+########################################################################################################################
+########################################################################################################################
+
+#
+# Bluegiga packet definitions (for transmission)
+#
+
+# GATT
+ble_cmd_connection_disconnect           = 0x00
+ble_cmd_attclient_read_by_group_type    = 0x01
+ble_cmd_attclient_find_information      = 0x03
+ble_cmd_attclient_attribute_write       = 0x05
+
+# GAP
+ble_cmd_gap_set_mode        = 0x01
+ble_cmd_gap_discover        = 0x02
+ble_cmd_gap_connect_direct  = 0x03
+ble_cmd_gap_end_procedure   = 0x04
+########################################################################################################################
+########################################################################################################################
+
 #
 # BLE Command definitions
 #
@@ -70,6 +140,8 @@ GATT_end_procedure_success      = 0
 find_info_success               = 0
 write_success                   = 0
 
+########################################################################################################################
+########################################################################################################################
 
 #
 # Myo Command Definitions
@@ -98,7 +170,7 @@ class IMU_Modes(Enum):
 
 class Classifier_Modes(Enum):
     myohw_classifier_mode_disabled  = 0x00   # Disable and reset the internal state of the onboard classifier.
-    myohw_classifier_mode_enabled   = 0x01    # Send classifier events (poses and arm events).
+    myohw_classifier_mode_enabled   = 0x01   # Send classifier events (poses and arm events).
 
 class Sleep_Modes(Enum):
     myohw_sleep_mode_normal      = 0 # Normal sleep mode; Myo will sleep after a period of inactivity.
