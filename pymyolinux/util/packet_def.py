@@ -99,3 +99,7 @@ class IMU_Modes(Enum):
 class Classifier_Modes(Enum):
     myohw_classifier_mode_disabled  = 0x00   # Disable and reset the internal state of the onboard classifier.
     myohw_classifier_mode_enabled   = 0x01    # Send classifier events (poses and arm events).
+
+class Sleep_Modes(Enum):
+    myohw_sleep_mode_normal      = 0 # Normal sleep mode; Myo will sleep after a period of inactivity.
+    myohw_sleep_mode_never_sleep = 1 # Never go to sleep.

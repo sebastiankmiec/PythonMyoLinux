@@ -6,7 +6,6 @@ from pymyolinux.core.handlers import *
 
 class BlueGigaProtocol():
 
-
     # on_busy = BGAPIEvent()
     # on_idle = BGAPIEvent()
     # on_timeout = BGAPIEvent()
@@ -62,11 +61,11 @@ class BlueGigaProtocol():
         self.packet_mode    = not self.use_rts_cts
 
         # Filled by user of this object
-        self.imu_handle     = None
-        self.emg_handle_0   = None
-        self.emg_handle_1   = None
-        self.emg_handle_2   = None
-        self.emg_handle_3   = None
+        self.imu_handle         = None
+        self.emg_handle_0       = None
+        self.emg_handle_1       = None
+        self.emg_handle_2       = None
+        self.emg_handle_3       = None
 
         # Filled by event handlers
         self.myo_devices        = []
@@ -137,6 +136,7 @@ class BlueGigaProtocol():
             self.ser.timeout = timeout
             while 1:
                 x = self.ser.read()
+
                 if len(x) > 0:
                     self.parse(x)
                 else: # timeout

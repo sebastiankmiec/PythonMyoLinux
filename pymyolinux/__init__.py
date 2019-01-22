@@ -1,0 +1,1 @@
+from pymyolinux.core.myo import MyoDongle

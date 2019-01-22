@@ -42,6 +42,7 @@ class MyoDongle():
         self.handles        = {}
         self.imu_enabled    = False
         self.emg_enabled    = False
+        self.sleep_disabled = False
 
     def clear_state(self, timeout=2):
 
@@ -92,9 +93,24 @@ class MyoDongle():
             if not resp_received:
                 raise RuntimeError("GATT procedure (write completion) response timed out.")
 
-        self.emg_enabled = False
-        self.imu_enabled = False
+        if self.sleep_disabled:
+            sleep_mode              = Sleep_Modes.myohw_sleep_mode_normal.value
+            mode_command_payload    = struct.pack('<3B', Myo_Commands.myohw_command_set_sleep_mode.value,
+                                                    1,  # Payload size
+                                                    sleep_mode)
 
+            self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                self.handles["command_characteristic"],
+                                mode_command_payload),
+                                BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+            resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+            if not resp_received:
+                raise RuntimeError("GATT procedure (write completion) response timed out.")
+
+        self.emg_enabled    = False
+        self.imu_enabled    = False
+        self.sleep_disabled = False
 
         # Disable dongle advertisement
         self.transmit_wait(self.ble.ble_cmd_gap_set_mode(GAP_Discoverable_Modes.gap_non_discoverable.value,
@@ -125,6 +141,7 @@ class MyoDongle():
 
         # Stop scanning
         self.transmit_wait(self.ble.ble_cmd_gap_end_procedure(), BlueGigaProtocol.ble_rsp_gap_end_procedure)
+
         return self.ble.myo_devices
 
     def connect(self, myo_device_found, timeout=2):
@@ -199,13 +216,9 @@ class MyoDongle():
             raise RuntimeError("BLE connection is None.")
 
         #
-        # Need to be able to activate notifications via writing to descriptor handles
+        # Ensure handles have been discovered
         #
-        if len(self.descriptors.keys()) == 0:
-            self.discover_primary_services()
-            if len(self.ble.attributes_found) == 0:
-                raise RuntimeError("No attributes found, ensure discover_primary_services() was called.")
-            self.fill_handles()
+        self.check_handles()
 
         self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
                                                                         self.handles["imu_descriptor"],
@@ -243,7 +256,7 @@ class MyoDongle():
         """
             On receiving an EMG data packet.
         :param handler: A function to be called with the following signature:
-                            ---> myfunc_data_handler_123(emg_1, emg_2, emg_3, emg_4, emg_5, emg_6, emg_7, emg_8)
+                            ---> myfunc_data_handler_123(emg_list)
         """
         if not self.emg_enabled:
             raise RuntimeError("EMG readings are not enabled.")
@@ -254,13 +267,9 @@ class MyoDongle():
             raise RuntimeError("BLE connection is None.")
 
         #
-        # Need to be able to activate notifications via writing to descriptor handles
+        # Ensure handles have been discovered
         #
-        if len(self.descriptors.keys()) == 0:
-            self.discover_primary_services()
-            if len(self.ble.attributes_found) == 0:
-                raise RuntimeError("No attributes found, ensure discover_primary_services() was called.")
-            self.fill_handles()
+        self.check_handles()
 
         for emg_num in range(4):
             self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
@@ -300,8 +309,7 @@ class MyoDongle():
         """
               On receiving an EMG data packet, use the latest IMU packet.
               :param handler: A function to be called with the following signature:
-                                  ---> myfunc_data_handler_123(emg_1, emg_2, emg_3, emg_4, emg_5, emg_6, emg_7, emg_8,
-                                                                        orient_w, orient_x, orient_y, orient_z, accel_1,
+                                  ---> myfunc_data_handler_123(emg_list, orient_w, orient_x, orient_y, orient_z, accel_1,
                                                                         accel_2, accel_3, gyro_1, gyro_2, gyro_3)
         """
         if not self.imu_enabled:
@@ -310,8 +318,50 @@ class MyoDongle():
             raise RuntimeError("EMG readings are not enabled.")
         self.ble.joint_emg_imu_event += handler
 
+    def set_sleep_mode(self, device_can_sleep):
+        if self.ble.connection is None:
+            raise RuntimeError("BLE connection is None.")
+
+        #
+        # Ensure handles have been discovered
+        #
+        self.check_handles()
+
+        #
+        # Issue a command to set "Myo device sleep mode"
+        #
+        sleep_mode = Sleep_Modes.myohw_sleep_mode_normal.value if device_can_sleep else \
+            Sleep_Modes.myohw_sleep_mode_never_sleep.value
+
+        mode_command_payload = struct.pack('<3B', Myo_Commands.myohw_command_set_sleep_mode.value,
+                                               1,  # Payload size
+                                               sleep_mode)
+
+        self.transmit_wait(self.ble.ble_cmd_attclient_attribute_write(self.ble.connection["connection"],
+                                                                      self.handles["command_characteristic"],
+                                                                      mode_command_payload),
+                           BlueGigaProtocol.ble_rsp_attclient_attribute_write)
+
+        resp_received = self.ble.read_incoming_conditional(BlueGigaProtocol.ble_evt_attclient_procedure_completed)
+        if not resp_received:
+            raise RuntimeError("GATT procedure (write completion) response timed out.")
+
+        if not device_can_sleep:
+            self.sleep_disabled = True
+
+
     def scan_for_data_packets(self, time=10):
         self.ble.read_incoming(time)
+
+    # Helper functions
+    def check_handles(self):
+        # Need to be able to activate notifications via writing to descriptor handles
+        #
+        if len(self.descriptors.keys()) == 0:
+            self.discover_primary_services()
+            if len(self.ble.attributes_found) == 0:
+                raise RuntimeError("No attributes found, ensure discover_primary_services() was called.")
+            self.fill_handles()
 
     def fill_handles(self):
         imu_uuid        = get_full_uuid(HW_Services.IMUDataCharacteristic.value)

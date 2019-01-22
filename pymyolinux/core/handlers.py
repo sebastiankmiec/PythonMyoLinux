@@ -35,18 +35,18 @@ def on_receive_attribute_value(sender_obj, connection, atthandle, type, value):
                 = struct.unpack('<16b', value)
 
         # Trigger two EMG events
-        sender_obj.emg_event(emg_1 = sample_0_1, emg_2 = sample_0_2, emg_3 = sample_0_3, emg_4 = sample_0_4,
-                                emg_5 = sample_0_5, emg_6 = sample_0_6, emg_7 = sample_0_7, emg_8 = sample_0_8)
-        sender_obj.emg_event(emg_1 = sample_1_1, emg_2 = sample_1_2, emg_3 = sample_1_3, emg_4 = sample_1_4,
-                                emg_5 = sample_1_5, emg_6 = sample_1_6, emg_7 = sample_1_7, emg_8 = sample_1_8)
+        sender_obj.emg_event(emg_list = [sample_0_1, sample_0_2, sample_0_3, sample_0_4, sample_0_5,
+                                                        sample_0_6, sample_0_7, sample_0_8])
+        sender_obj.emg_event(emg_list = [sample_1_1, sample_1_2, sample_1_3, sample_1_4, sample_1_5,
+                                                        sample_1_6, sample_1_7, sample_1_8])
 
         # Trigger two joint IMU/EMG events:
-        sender_obj.joint_emg_imu_event(emg_1 = sample_0_1, emg_2 = sample_0_2, emg_3 = sample_0_3, emg_4 = sample_0_4,
-                                            emg_5 = sample_0_5, emg_6 = sample_0_6, emg_7 = sample_0_7,
-                                            emg_8 = sample_0_8, **sender_obj.current_imu_read)
-        sender_obj.joint_emg_imu_event(emg_1 = sample_1_1, emg_2 = sample_1_2, emg_3 = sample_1_3, emg_4 = sample_1_4,
-                                            emg_5 = sample_1_5, emg_6 = sample_1_6, emg_7 = sample_1_7,
-                                            emg_8 = sample_1_8, **sender_obj.current_imu_read)
+        sender_obj.joint_emg_imu_event(emg_list = [sample_0_1, sample_0_2, sample_0_3, sample_0_4, sample_0_5,
+                                                        sample_0_6, sample_0_7, sample_0_8],
+                                                    **sender_obj.current_imu_read)
+        sender_obj.joint_emg_imu_event(emg_list = [sample_1_1, sample_1_2, sample_1_3, sample_1_4, sample_1_5,
+                                                        sample_1_6, sample_1_7, sample_1_8],
+                                                    **sender_obj.current_imu_read)
 
 
 #######
@@ -66,7 +66,16 @@ def add_myo_device(sender_obj, rssi, packet_type, sender, address_type, bond, da
     if data.endswith(control_uuid):
         myo_connection = {"sender_address": sender, "address_type": address_type, "rssi": rssi}
 
-        if myo_connection not in sender_obj.myo_devices:
+        unique = True
+        for device in sender_obj.myo_devices: # Note, device also has "rssi"
+            if (
+                    (myo_connection["sender_address"] == device["sender_address"]) and
+                    (myo_connection["address_type"] == device["address_type"])
+                ):
+                unique = False
+                break
+
+        if unique:
             sender_obj.myo_devices.append(myo_connection)
 
 def add_connection(sender_obj, connection, flags, address, address_type, conn_interval, timeout, latency, bonding):
