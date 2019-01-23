@@ -15,7 +15,7 @@ from PyQt5.QtChart import QChartView
 import sys
 import time
 from functools import partial
-from os.path import curdir, exists, join
+from os.path import curdir, exists, join, abspath
 import copy
 from serial.tools.list_ports import comports
 
@@ -443,7 +443,7 @@ class TopLevel(QWidget):
                 continue
 
             port_list_entry = QListWidgetItem(port_attr["device"])
-            port_list_entry.setIcon(QIcon("icons/sp.png"))
+            port_list_entry.setIcon(QIcon(join(abspath(__file__).replace("main.py", ""), "icons/sp.png")))
             port_list_entry.port_idx    = ports_found
             port_list_entry.port        = port_attr["device"]
             self.ports_found.insertItem(ports_found, port_list_entry);

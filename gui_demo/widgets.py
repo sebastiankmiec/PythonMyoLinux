@@ -9,6 +9,7 @@ from PyQt5.QtChart import QLineSeries, QValueAxis
 #
 # Miscellaneous imports
 #
+from os.path import join, abspath
 import time
 
 #
@@ -50,7 +51,7 @@ class MyoFoundWidget(QWidget):
 
         # Myo armband icon
         lbl     = QLabel(self)
-        orig    = QPixmap("icons/myo.png")
+        orig    = QPixmap(join(abspath(__file__).replace("widgets.py", ""), "icons/myo.png"))
         new     = orig.scaled(QSize(45, 45), Qt.KeepAspectRatio)
         lbl.setPixmap(new)
 

@@ -13,7 +13,6 @@ import time
 #
 # Submodules in this repository
 #
-sys.path.append('../pymyolinux')
 from pymyolinux import MyoDongle
 from param import *
 
