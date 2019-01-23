@@ -1,1 +1,20 @@
 # PythonMyoLinux
+This repository contains the following:
+1. A Python (3.5) package to collect sEMG and IMU measurements from Myo armband devices, featuring:
+   1. An implementation of the Bluegiga API (BGAPI).
+   2. Use of GAP and GATT client to:
+      * Discover, and connect to devices.
+      * Discover and subscribe to available services.
+   3. Use of Myo specific commands.
+  
+2. A GUI demonstration.
+
+# References
+1. "Getting Started with Bluetooth Low Energy" by O'Reilly Media, Inc.
+   * For a brief understanding of the Bluetooth stack, and Bluetooth core specification.
+2. https://www.silabs.com/products/wireless/bluetooth/bluetooth-low-energy-modules/bled112-bluetooth-smart-dongle
+   * See "Bluetooth Smart Software API Reference Manual for BLE Version 1.7", to understand BGAPI.
+3. https://github.com/mjbrown/bgapi 
+   * A major inspiration for this work.
+3. https://github.com/thalmiclabs/myo-bluetooth
+   * Contains Myo specific commands.
