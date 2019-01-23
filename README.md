@@ -9,6 +9,29 @@ This repository contains the following:
   
 2. A GUI demonstration.
 
+# Setup & Usage
+First perform the following:
+```
+git clone https://github.com/sebastiankmiec/PythonMyoLinux.git
+cd PythonMyoLinux
+conda create -n myo_env python=3.5
+conda activate myo_env
+```
+
+#### 1. Python package
+```
+conda install pyserial
+python main.py
+```
+
+#### 2. GUI demonstration
+```
+pip install .
+pip install PyQt5
+pip install PyQtChart
+python gui_demo/main.py
+```
+
 # References
 1. "Getting Started with Bluetooth Low Energy" by O'Reilly Media, Inc.
    * For a brief understanding of the Bluetooth stack, and Bluetooth core specification.
