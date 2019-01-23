@@ -42,27 +42,27 @@ command_message     = 0x00
 packet_header_legnth    = 4
 packet_length_high_bits = 0x07
 
-class BGAPI_Classes:
+class BGAPI_Classes(Enum):
     Connection  = 0x03 # Provides access to connection management functions
     GATT        = 0x04 # Functions to access remote devices GATT database
-    GAP         = 0X06 # GAP (Generic Access Profile) functions
+    GAP         = 0x06 # GAP (Generic Access Profile) functions
 
-class GATT_Response_Commands:
+class GATT_Response_Commands(Enum):
     ble_rsp_attclient_read_by_group_type = 0x01
     ble_rsp_attclient_find_information   = 0x03
     ble_rsp_attclient_attribute_write    = 0x05
 
-class GATT_Event_Commands:
+class GATT_Event_Commands(Enum):
     ble_evt_attclient_procedure_completed       = 0x01
     ble_evt_attclient_group_found               = 0x02
     ble_evt_attclient_find_information_found    = 0x04
     ble_evt_attclient_attribute_value           = 0x05
 
-class GAP_Event_Commands:
+class GAP_Event_Commands(Enum):
     ble_evt_gap_scan_response = 0x00
     ble_evt_gap_mode_changed  = 0x01
 
-class GAP_Response_Commands:
+class GAP_Response_Commands(Enum):
     ble_rsp_gap_set_mode        = 0x01
     ble_rsp_gap_discover        = 0x02
     ble_rsp_gap_connect_direct  = 0x03
@@ -75,7 +75,6 @@ ble_evt_connection_disconnected = 0x04 # Event
 
 ########################################################################################################################
 ########################################################################################################################
-
 #
 # Bluegiga packet definitions (for transmission)
 #
@@ -91,6 +90,7 @@ ble_cmd_gap_set_mode        = 0x01
 ble_cmd_gap_discover        = 0x02
 ble_cmd_gap_connect_direct  = 0x03
 ble_cmd_gap_end_procedure   = 0x04
+
 ########################################################################################################################
 ########################################################################################################################
 

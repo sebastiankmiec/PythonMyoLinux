@@ -247,7 +247,7 @@ class TopLevel(QWidget):
 
             # Define time of first data point (using a buffer period)
             start_time      = max_first + BUFFER_PERIOD
-            if start_time < min_last:
+            if start_time > min_last:
                 self.warning = QErrorMessage()
                 self.warning.showMessage("Less than {} seconds worth of data collected.".format(BUFFER_PERIOD))
                 self.warning.show()

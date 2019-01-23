@@ -235,7 +235,7 @@ class BlueGigaProtocol():
         #
         # If valid Message/Technology Types
         #
-        if (len(self.read_buffer) == 0 and  \
+        if (len(self.read_buffer) == 0 and
                 (byte_read in [bluetooth_resp, bluetooth_event, wifi_resp, wifi_event])):
             self.read_buffer += bytes([byte_read])
 
@@ -255,10 +255,10 @@ class BlueGigaProtocol():
         if self.expected_packet_length > 0 and len(self.read_buffer) == self.expected_packet_length:
 
             if self.debug:
-                print('<=[ ' + ' '.join(['%02X' % b for b in self.bgapi_rx_buffer ]) + ' ]')
+                print('<=[ ' + ' '.join(['%02X' % b for b in self.read_buffer ]) + ' ]')
 
-            packet_type, _, class_id, command_id = self.bgapi_rx_buffer[:packet_header_legnth]
-            packet_payload  = self.bgapi_rx_buffer[packet_header_legnth:]
+            packet_type, _, class_id, command_id = self.read_buffer[:packet_header_legnth]
+            packet_payload = self.read_buffer[packet_header_legnth:]
 
             # Note: Part of this byte (and next byte "_") contains bits for payload length
             packet_type     = packet_type & packet_type_bits
@@ -277,7 +277,7 @@ class BlueGigaProtocol():
                 #
                 if class_id == BGAPI_Classes.Connection.value:
                     if command_id == ble_rsp_connection_disconnect:
-                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        connection, result = struct.unpack('<BH', packet_payload[:3])
                         if result != disconnect_procedure_started:
                             if self.debug:
                                 print("Failed to start disconnect procedure for connection {}.".format(connection))
@@ -290,21 +290,21 @@ class BlueGigaProtocol():
                 #
                 # GATT packets - discover services, acquire data
                 #
-                elif class_id == BGAPI_Classes.GATT:
+                elif class_id == BGAPI_Classes.GATT.value:
 
                     if command_id == GATT_Response_Commands.ble_rsp_attclient_read_by_group_type.value:
-                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        connection, result = struct.unpack('<BH', packet_payload[:3])
                         self.ble_rsp_attclient_read_by_group_type(**{ 'connection': connection, 'result': result })
 
                     elif command_id == GATT_Response_Commands.ble_rsp_attclient_find_information.value:
-                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        connection, result = struct.unpack('<BH', packet_payload[:3])
                         if result != find_info_success:
                             if self.debug:
                                 print("Error using find information command.")
                         self.ble_rsp_attclient_find_information(**{ 'connection': connection, 'result': result })
 
                     elif command_id == GATT_Response_Commands.ble_rsp_attclient_attribute_write.value:
-                        connection, result = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        connection, result = struct.unpack('<BH', packet_payload[:3])
                         if result != write_success:
                             raise("Write attempt was unsuccessful.")
                         self.ble_rsp_attclient_attribute_write(**{ 'connection': connection, 'result': result })
@@ -312,10 +312,10 @@ class BlueGigaProtocol():
                 #
                 # GAP packets - advertise, observe, connect
                 #
-                elif class_id == BGAPI_Classes.GAP:
+                elif class_id == BGAPI_Classes.GAP.value:
 
                     if command_id == GAP_Response_Commands.ble_rsp_gap_set_mode.value:
-                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        result = struct.unpack('<H', packet_payload[:2])[0]
                         if result != GAP_set_mode_success:
                             raise RuntimeError("Failed to set GAP mode.")
                         else:
@@ -324,19 +324,19 @@ class BlueGigaProtocol():
                         self.ble_rsp_gap_set_mode(**{ 'result': result })
 
                     elif command_id == GAP_Response_Commands.ble_rsp_gap_discover.value:
-                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        result = struct.unpack('<H', packet_payload[:2])[0]
                         if result != GAP_start_procedure_success:
                             raise RuntimeError("Failed to start GAP discover procedure.")
                         self.ble_rsp_gap_discover(**{ 'result': result })
 
                     elif command_id == GAP_Response_Commands.ble_rsp_gap_connect_direct.value:
-                        result, connection_handle = struct.unpack('<HB', self.bgapi_rx_payload[:3])
+                        result, connection_handle = struct.unpack('<HB', packet_payload[:3])
                         if result != GAP_start_procedure_success:
                             raise RuntimeError("Failed to start GAP connection procedure.")
                         self.ble_rsp_gap_connect_direct(**{ 'result': result, 'connection_handle': connection_handle })
 
                     elif command_id == GAP_Response_Commands.ble_rsp_gap_end_procedure.value:
-                        result = struct.unpack('<H', self.bgapi_rx_payload[:2])[0]
+                        result = struct.unpack('<H', packet_payload[:2])[0]
                         if result != GAP_end_procedure_success:
                             if self.debug:
                                 print("Failed to end GAP procedure.")
@@ -353,57 +353,57 @@ class BlueGigaProtocol():
                 #
                 if class_id == BGAPI_Classes.Connection.value:
                     if command_id == ble_evt_connection_status:
-                        connection, flags, address, address_type, conn_interval, timeout, latency, bonding = struct.unpack('<BB6sBHHHB', self.bgapi_rx_payload[:16])
+                        connection, flags, address, address_type, conn_interval, timeout, latency, bonding = struct.unpack('<BB6sBHHHB', packet_payload[:16])
                         args = { 'connection': connection, 'flags': flags, 'address': address, 'address_type': address_type, 'conn_interval': conn_interval, 'timeout': timeout, 'latency': latency, 'bonding': bonding }
                         print("Connected to a device with the following parameters:\n{}".format(args))
                         self.ble_evt_connection_status(**args)
 
                     elif command_id == ble_evt_connection_disconnected:
-                        connection, reason = struct.unpack('<BH', self.bgapi_rx_payload[:3])
+                        connection, reason = struct.unpack('<BH', packet_payload[:3])
                         if (self.connection is None) or (connection == self.connection["connection"]):
                             self.ble_evt_connection_disconnected(**{ 'connection': connection, 'reason': reason })
 
                 #
                 # GATT packets - discover services, acquire data
                 #
-                elif class_id == BGAPI_Classes.GATT:
+                elif class_id == BGAPI_Classes.GATT.value:
 
                     if command_id == GATT_Event_Commands.ble_evt_attclient_procedure_completed.value:
-                        connection, result, chrhandle = struct.unpack('<BHH', self.bgapi_rx_payload[:5])
+                        connection, result, chrhandle = struct.unpack('<BHH', packet_payload[:5])
                         if (self.connection is not None) and (connection == self.connection["connection"]):
                             self.ble_evt_attclient_procedure_completed(**{ 'connection': connection, 'result': result, 'chrhandle': chrhandle })
 
                     elif command_id == GATT_Event_Commands.ble_evt_attclient_group_found.value:
-                        connection, start, end, uuid_len = struct.unpack('<BHHB', self.bgapi_rx_payload[:6])
+                        connection, start, end, uuid_len = struct.unpack('<BHHB', packet_payload[:6])
                         if (self.connection is not None) and (connection == self.connection["connection"]):
-                            uuid_data = self.bgapi_rx_payload[6:]
+                            uuid_data = packet_payload[6:]
                             self.ble_evt_attclient_group_found(**{ 'connection': connection, 'start': start, 'end': end, 'uuid': uuid_data })
 
                     elif command_id == GATT_Event_Commands.ble_evt_attclient_find_information_found.value:
-                        connection, chrhandle, uuid_len = struct.unpack('<BHB', self.bgapi_rx_payload[:4])
-                        uuid_data = self.bgapi_rx_payload[4:]
+                        connection, chrhandle, uuid_len = struct.unpack('<BHB', packet_payload[:4])
+                        uuid_data = packet_payload[4:]
                         if (self.connection is not None) and (connection == self.connection["connection"]):
                             self.ble_evt_attclient_find_information_found(**{ 'connection': connection, 'chrhandle': chrhandle, 'uuid': uuid_data })
 
                     elif command_id == GATT_Event_Commands.ble_evt_attclient_attribute_value.value:
-                        connection, atthandle, type, value_len = struct.unpack('<BHBB', self.bgapi_rx_payload[:5])
+                        connection, atthandle, type, value_len = struct.unpack('<BHBB', packet_payload[:5])
                         if (self.connection is not None) and (connection == self.connection["connection"]):
-                            value_data = self.bgapi_rx_payload[5:]
+                            value_data = packet_payload[5:]
                             self.ble_evt_attclient_attribute_value(**{ 'connection': connection, 'atthandle': atthandle, 'type': type, 'value': value_data })
 
                 #
                 # GAP packets - advertise, observe, connect
                 #
-                elif class_id == BGAPI_Classes.GAP:
+                elif class_id == BGAPI_Classes.GAP.value:
 
                     if command_id == GAP_Event_Commands.ble_evt_gap_scan_response.value:
-                        rssi, packet_type, sender, address_type, bond, data_len = struct.unpack('<bB6sBBB', self.bgapi_rx_payload[:11])
-                        data_data = self.bgapi_rx_payload[11:]
+                        rssi, packet_type, sender, address_type, bond, data_len = struct.unpack('<bB6sBBB', packet_payload[:11])
+                        data_data = packet_payload[11:]
                         self.ble_evt_gap_scan_response(**{ 'rssi': rssi, 'packet_type': packet_type, 'sender': sender, 'address_type': address_type, 'bond': bond, 'data': data_data })
 
                     elif command_id == GAP_Event_Commands.ble_evt_gap_mode_changed.value:
                         pass
-                        #discover, connect = struct.unpack('<BB', self.bgapi_rx_payload[:2])
+                        #discover, connect = struct.unpack('<BB', packet_payload[:2])
                         #self.ble_evt_gap_mode_changed({ 'discover': discover, 'connect': connect })
 
             #

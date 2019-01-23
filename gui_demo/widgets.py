@@ -108,7 +108,7 @@ class MyoFoundWidget(QWidget):
             self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
             self.chart_list[i].chart().removeAxis(self.yaxis_list[i])
 
-        self.disconnect_notify(self.myo_device["sender_address"].hex(), self.port)
+        self.disconnect_notify(self.myo_device["sender_address"].hex())
 
     def connect_with_myo(self):
         """
