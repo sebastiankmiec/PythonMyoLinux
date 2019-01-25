@@ -9,6 +9,8 @@ This repository contains the following:
   
 2. A GUI demonstration.
 
+![image](https://drive.google.com/uc?export=view&id=1G40KBpmYx6hCCASe5zwHfsd21CBqkGtE)
+
 # Setup & Usage
 First perform the following:
 ```
