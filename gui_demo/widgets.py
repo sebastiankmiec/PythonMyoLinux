@@ -1,10 +1,14 @@
 #
 # PyQt5 imports
 #
-from PyQt5.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame)
-from PyQt5.QtGui import QPixmap
-from PyQt5.QtCore import Qt, QSize, QThreadPool
-from PyQt5.QtChart import QLineSeries, QValueAxis
+from PyQt5.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
+                                QGridLayout, QSizePolicy)
+from PyQt5.QtGui import QPixmap, QFontMetrics
+from PyQt5.QtCore import Qt, QSize, QThreadPool, QObject, pyqtSignal, QUrl
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaPlaylist, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+import pyqtgraph as pg
+# from PyQt5.QtChart import QLineSeries, QValueAxis
 
 #
 # Miscellaneous imports
@@ -105,9 +109,11 @@ class MyoFoundWidget(QWidget):
         while not self.worker.exiting:
             time.sleep(self.sleep_period)
 
-        for i in range(len(self.measurements_list)):
-            self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
-            self.chart_list[i].chart().removeAxis(self.yaxis_list[i])
+        # Old backend:
+        #
+        #for i in range(len(self.measurements_list)):
+        #    self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
+        #    self.chart_list[i].chart().removeAxis(self.yaxis_list[i])
 
         self.disconnect_notify(self.myo_device["sender_address"].hex())
 
@@ -147,32 +153,45 @@ class MyoFoundWidget(QWidget):
 
         # Data to be collected
         self.samples_count = 0
-        self.measurements_list = [QLineSeries() for x in range(8)]
+        self.measurements_list  = [[] for x in range(8)]
+        self.plotted_data       = [None for x in range(8)]
+        self.data_indices       = []
 
+        # Old backend:
+        #
+        # self.measurements_list = [QLineSeries() for x in range(8)]
+        #
         # Add a legend to each chart, and connect data (series) to charts
-        for i, series in enumerate(self.measurements_list):
-            self.chart_list[i].chart().legend().setVisible(False)
-            self.chart_list[i].chart().addSeries(series)
-
+        #for i, series in enumerate(self.measurements_list):
+        #    self.chart_list[i].chart().legend().setVisible(False)
+        #    self.chart_list[i].chart().addSeries(series)
+        #
         # Add axes to each chart
-        self.xaxis_list = [QValueAxis() for x in range(8)]
-        self.yaxis_list = [QValueAxis() for x in range(8)]
+        # self.xaxis_list = [QValueAxis() for x in range(8)]
+        # self.yaxis_list = [QValueAxis() for x in range(8)]
+
 
         for i, series in enumerate(self.measurements_list):
-            self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
-            self.chart_list[i].chart().addAxis(self.yaxis_list[i], Qt.AlignLeft)
-            self.xaxis_list[i].setRange(0, NUM_GUI_SAMPLES)
-            self.yaxis_list[i].setRange(-128, 127)                          # EMG values are signed 8-bit values
+            # self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
+            # self.chart_list[i].chart().addAxis(self.yaxis_list[i], Qt.AlignLeft)
+            # self.xaxis_list[i].setRange(0, NUM_GUI_SAMPLES)
+            # self.yaxis_list[i].setRange(-128, 127)  # EMG values are signed 8-bit
+            # self.chart_list[i].setXRange(0, NUM_GUI_SAMPLES)
 
-        for i, series in enumerate(self.measurements_list):
-            series.attachAxis(self.xaxis_list[i])
-            series.attachAxis(self.yaxis_list[i])
+            # Generate an initial, empty plot --> update data later
+            self.plotted_data[i] = self.chart_list[i].plot(self.data_indices, self.measurements_list[i],
+                                                            pen=pg.functions.mkPen("08E", width=2),
+                                                            symbol='o', symbolSize=SYMBOL_SIZE)
+
+        #for i, series in enumerate(self.measurements_list):
+        #    series.attachAxis(self.xaxis_list[i])
+        #    series.attachAxis(self.yaxis_list[i])
 
         #
         # Begin the process of connecting and collecting data
         #
-        self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list,
-                                                        self.joint_emg_imu_data_handler, self.data_list)
+        self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
+                                        self.on_axes_update, self.on_new_data, self.data_list)
         QThreadPool.globalInstance().start(self.worker)
         while not self.worker.running:
             time.sleep(self.sleep_period)
@@ -181,28 +200,135 @@ class MyoFoundWidget(QWidget):
         self.enable_text.setText("Disable: ")
         self.connected          = True
 
-    def joint_emg_imu_data_handler(self):
+    def on_new_data(self):
+        """
+
+            :return: None
+        """
+
+        if self.connected:
+            tab_open = self.tab_open()
+
+            # Update plot data
+            for i, series in enumerate(self.measurements_list):
+                if i == tab_open:
+                    self.plotted_data[i].setData(self.data_indices, self.measurements_list[i])
+
+    def on_axes_update(self):
         """
             After a set amount of data is collected, the axes of the charts needs to be updated, to focus on
                 the most recent data.
+
+                > This function is triggred by a ChartUpdate event, specifically, an axesUpdate signal.
 
         :return: None
         """
 
         if self.connected:
             tab_open = self.tab_open()
+
+            # Update axes
             for i, series in enumerate(self.measurements_list):
-
-                # An optimization to prevent unnecessary rendering
                 if i == tab_open:
+                    self.chart_list[i].setXRange(self.worker.start_range,
+                                                    self.worker.samples_count + NUM_GUI_SAMPLES, padding=0.075)
 
-                    # Remove old x-axis
-                    series.detachAxis(self.xaxis_list[i])
-                    self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
-                    self.xaxis_list[i] = QValueAxis()
+            # for i, series in enumerate(self.measurements_list):
+            #
+            #     # An optimization to prevent unnecessary rendering
+            #     if i == tab_open:
+            #
+            #         # Remove old x-axis
+            #         series.detachAxis(self.xaxis_list[i])
+            #         self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
+            #         self.xaxis_list[i] = QValueAxis()
+            #
+            #         # Add new x-axis
+            #         self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
+            #         self.xaxis_list[i].setRange(self.worker.samples_count, self.worker.samples_count +
+            #                                         NUM_GUI_SAMPLES)
+            #         series.attachAxis(self.xaxis_list[i])
 
-                    # Add new x-axis
-                    self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
-                    self.xaxis_list[i].setRange(self.worker.samples_count, self.worker.samples_count +
-                                                    NUM_GUI_SAMPLES)
-                    series.attachAxis(self.xaxis_list[i])
+
+class GroundTruthHelper(QWidget):
+    def __init__(self, parent=None, close_function=None):
+        #super(GroundTruthHelper, self).__init__(parent)
+        super().__init__()
+
+        self.close_event = self.Exit()
+        if close_function is not None:
+            self.close_event.exitClicked.connect(close_function)
+
+        self.initUI()
+
+    def initUI(self):
+        self.setGeometry(0, 0, 1024, 768)
+
+        self.grid   = QGridLayout()
+
+        # Title
+        gt_title  = QLabel("Ground Truth Helper")
+        gt_title.setStyleSheet("font-weight: bold;")
+        gt_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.grid.addWidget(gt_title, 0, 1, 1, 1)
+
+        # Start button
+        start_button   = QPushButton("Start")
+        start_button.clicked.connect(self.start_videos)
+        self.grid.addWidget(start_button, 1, 2, 1, 1)
+
+        # Video Player
+        self.player      = QMediaPlayer()
+        playlist    = QMediaPlaylist(self.player)
+        playlist.addMedia(QMediaContent(QUrl.fromLocalFile("/home/skmiec/Downloads/final/arrows/exercise_a/a1.mp4")))
+        playlist.addMedia(QMediaContent(QUrl.fromLocalFile("/home/skmiec/Downloads/final/arrows/exercise_a/a2.mp4")))
+
+        videoWidget = QVideoWidget()
+        self.player.setVideoOutput(videoWidget)
+        self.grid.addWidget(videoWidget, 2, 2, 1, 1)
+
+        videoWidget.show()
+        playlist.setCurrentIndex(1)
+        #player.play()
+
+        #self.grid.setRowStretch(0, 1)
+        #self.grid.setRowStretch(1, 1)
+        #self.grid.setColumnStretch(0, 1)
+        #self.grid.setColumnStretch(1, 1)
+
+        self.setLayout(self.grid)
+
+    def start_videos(self):
+        self.player.play()
+
+    # def resizeEvent(self, e):
+    #     """
+    #         Resizes title text on resize event.
+    #     :param e: A resize event
+    #     :return: None
+    #     """
+    #     cur_font    = self.gt_title.font()
+    #     metrics     = QFontMetrics(cur_font)
+    #
+    #     size    = metrics.size(0, self.gt_title.text())
+    #     width   = self.gt_title.width() / (size.width() * 1.75)
+    #     height  = self.gt_title.height() / (size.height() * 1.75)
+    #
+    #     factor  = (width + height) / 1.75
+    #
+    #     cur_font.setPointSizeF(cur_font.pointSizeF() * factor)
+    #     self.gt_title.setFont(cur_font)
+
+    #
+    # Used by TopLevel widget
+    #
+    class Exit(QObject):
+        exitClicked = pyqtSignal()
+    def closeEvent(self, event):
+        self.close_event.exitClicked.emit()
+
+    #
+    # Used for data logging
+    #
+    def get_current_label(self):
+        pass

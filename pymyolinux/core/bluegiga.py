@@ -126,7 +126,9 @@ class BlueGigaProtocol():
             self.busy_reading   = True
             time_spent          = time.time() - start_time
             time_left           = timeout - time_spent
-            self.read_bytes(time_left)
+
+            if time_left > 0:
+                self.read_bytes(time_left)
 
     def read_packets_conditional(self, event, timeout=2):
         """
@@ -148,7 +150,9 @@ class BlueGigaProtocol():
             self.busy_reading   = True
             time_spent          = time.time() - start_time
             time_left           = timeout - time_spent
-            self.read_bytes(time_left)
+
+            if time_left > 0:
+                self.read_bytes(time_left)
 
             if self.get_event_count(event) > 0:
                 self.__eventcounter__[event] = 0

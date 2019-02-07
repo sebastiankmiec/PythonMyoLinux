@@ -24,7 +24,7 @@ class MyoSearch(QObject):
     searchComplete = pyqtSignal()
 class ChartUpdate(QObject):
     axesUpdate = pyqtSignal()
-
+    dataUpdate = pyqtSignal()
 
 class MyoDataWorker(QRunnable):
     """
@@ -34,7 +34,7 @@ class MyoDataWorker(QRunnable):
             3) Collects data from a Myo armband device
             4) Optionally, disconnects on a second press, halting the receipt of data
     """
-    def __init__(self, port, myo_device, series_list, axes_callback, data_list):
+    def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list):
         """
         :param port: Port used to create MyoFoundWidget widget.
         :param myo_device: Address of Myo device to interact with.
@@ -46,9 +46,11 @@ class MyoDataWorker(QRunnable):
         self.dongle         = MyoDongle(port)
         self.myo_device     = myo_device
         self.series_list    = series_list
+        self.indices_list   = indices_list
         self.data_list      = data_list
         self.update         = ChartUpdate()
         self.update.axesUpdate.connect(axes_callback)
+        self.update.dataUpdate.connect(data_call_back)
         self.scan_period    = 0.2 # seconds
 
         # States
@@ -91,9 +93,22 @@ class MyoDataWorker(QRunnable):
         """
 
         if self.running:
+
+            # Request an axes update for the charts
+            if (self.samples_count != 0) and (self.samples_count % NUM_GUI_SAMPLES == 0):
+                self.start_range = self.samples_count
+                for i in range(len(self.series_list)):
+                    self.series_list[i].clear()
+                    # self.series_list[i].removePoints(0, NUM_GUI_SAMPLES-1)
+                self.indices_list.clear()
+                self.update.axesUpdate.emit()
+
             # Update chart data
             for i in range(len(self.series_list)):
-                self.series_list[i].append(self.samples_count, emg_list[i])
+                #self.series_list[i].append(self.samples_count, emg_list[i])
+                self.series_list[i].append(emg_list[i])
+            self.indices_list.append(self.samples_count)
+            self.update.dataUpdate.emit()
 
             # Accelerometer values are multipled by the following constant (and are in units of g)
             MYOHW_ACCELEROMETER_SCALE = 2048.0
@@ -113,18 +128,14 @@ class MyoDataWorker(QRunnable):
                                         [gyro_1 / MYOHW_GYROSCOPE_SCALE, gyro_2 / MYOHW_GYROSCOPE_SCALE,
                                          gyro_3 / MYOHW_GYROSCOPE_SCALE]))
 
-            # Update list of all data collected
+            # Update list of all data collected (without scaling)
+            #
             # self.data_list.append((time.time(), self.samples_count, emg_list, [orient_w, orient_x, orient_y, orient_z],
             #                       [accel_1, accel_2, accel_3],
             #                       [gyro_1, gyro_2, gyro_3]))
-
             self.samples_count += 1
 
-            # Request an axes update for the charts
-            if self.samples_count % NUM_GUI_SAMPLES == 0:
-                for i in range(len(self.series_list)):
-                    self.series_list[i].removePoints(0, NUM_GUI_SAMPLES-1)
-                self.update.axesUpdate.emit()
+
 
 
 class MyoSearchWorker(QRunnable):

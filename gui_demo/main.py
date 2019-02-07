@@ -3,11 +3,13 @@
 #
 from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton, QGridLayout, QApplication, QSizePolicy,
                                 QHBoxLayout, QVBoxLayout, QListWidget, QListWidgetItem, QProgressDialog, QErrorMessage,
-                                QTabWidget, QGroupBox, QFileDialog, QMessageBox)
+                                QTabWidget, QGroupBox, QFileDialog, QMessageBox, QFrame)
 
 from PyQt5.QtGui import QFontMetrics, QIcon
 from PyQt5.QtCore import Qt, QThreadPool
-from PyQt5.QtChart import QChartView
+import pyqtgraph as pg
+from pyqtgraph import GraphicsLayout
+# from PyQt5.QtChart import QChartView
 
 #
 # Miscellaneous imports
@@ -23,7 +25,7 @@ from serial.tools.list_ports import comports
 # Submodules in this repository
 #
 from backgroundworker import MyoSearchWorker
-from widgets import MyoFoundWidget
+from widgets import MyoFoundWidget, GroundTruthHelper
 from param import *
 
 ########################################################################################################################
@@ -60,6 +62,9 @@ class TopLevel(QWidget):
         self.start_time     = time.time()
         self.data_directory = None
         self.increments     = 100           # Number of progress bar increments (when searching for Myo devices)
+
+        self.gt_helper_open = False         # Ground truth helper
+
         self.initUI()
 
     def initUI(self):
@@ -68,7 +73,7 @@ class TopLevel(QWidget):
         # Top-level layout
         #
         grid = QGridLayout()
-        grid.setSpacing(20)
+        grid.setSpacing(15)
         self.setGeometry(0, 0, 1024, 768)
         self.setWindowTitle('Myo Data Collection Tool')
 
@@ -89,18 +94,81 @@ class TopLevel(QWidget):
         self.visual_title.setStyleSheet("font-weight: bold;")
         self.visual_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        self.myo_1_charts  = [QChartView() for x in range(8)]               # EMG data plots
-        self.myo_2_charts  = [QChartView() for x in range(8)]
-
+        # EMG data plots
+        self.myo_1_layouts  = [pg.GraphicsLayoutWidget() for x in range(8)]
+        self.myo_2_layouts  = [pg.GraphicsLayoutWidget() for x in range(8)]
+        self.myo_1_charts   = [None for x in range(8)]
+        self.myo_2_charts   = [None for x in range(8)]
         self.top_tab        = QTabWidget()                                  # Top-level tab container
 
+        # Old backend
+        #self.myo_1_charts = [QChartView() for x in range(8)]               # EMG data plots
+        #self.myo_2_charts = [QChartView() for x in range(8)]
+
+        # Custom y-axis for EMG plots
+        def custom_y_ticks(*args):
+            return [(200.0, [-128, 0, 127]), (100.0, [-80, -40, 40, 80])]
+
+        # Plot formatting (device one)
         self.myo_1_tab      = QTabWidget()                                  # Myo device 1 tab
         for i, chart in enumerate(self.myo_1_charts):                       # Channels 1-8 subtabs
-            self.myo_1_tab.addTab(chart, "Ch. " + str(i+1))
 
+            brush = pg.functions.mkBrush(255, 255, 255)
+            self.myo_1_layouts[i].setBackgroundBrush(brush)
+
+            # Add widget to tab
+            self.myo_1_tab.addTab(self.myo_1_layouts[i], "Ch. " + str(i+1))
+
+            # Add plot to new widget
+            temp_plot = pg.PlotItem()
+            self.myo_1_layouts[i].addItem(row=0, col=0, rowspan=1, colspan=1, item = temp_plot)
+            self.myo_1_charts[i] = temp_plot
+            temp_plot.setMenuEnabled(False)
+
+            # Customize plot
+            self.myo_1_charts[i].setXRange(0, NUM_GUI_SAMPLES, padding=0.075)
+            self.myo_1_charts[i].setYRange(-150, 150, padding=0)  # EMG values are signed 8-bit
+            self.myo_1_charts[i].showGrid(True, True, 0.6)
+            self.myo_1_layouts[i].ci.setContentsMargins(10, 10, 40, 20)
+
+            left_axis               = self.myo_1_charts[i].getAxis("left")
+            left_axis.tickValues    = custom_y_ticks
+            left_axis.setPen(color="333")
+
+            bottom_axis             = self.myo_1_charts[i].getAxis("bottom")
+            labelStyle = {'color': '#000', 'font-size': '12t', "font-style": "italic", "font-weight": "bold"}
+            bottom_axis.setLabel(text="Sample Number", **labelStyle)
+            bottom_axis.setPen(color="333")
+
+            self.myo_1_charts[i].setTitle(title="Device 1 - Channel {} - EMG Amplitude".format(i + 1), size="15pt",
+                                        bold=True, color="000088")
+
+        # Plot formatting (device two)
         self.myo_2_tab    = QTabWidget()
         for i, chart in enumerate(self.myo_2_charts):                       # Myo device 2 tab
-            self.myo_2_tab.addTab(chart, "Ch. " + str(i+1))
+            # Add widget to tab
+            self.myo_2_tab.addTab(self.myo_2_layouts[i], "Ch. " + str(i + 1))
+
+            # Add plot to new widget
+            temp_plot = pg.PlotItem()
+            self.myo_2_layouts[i].addPlot(row=0, col=0, rowspan=1, colspan=1, item=temp_plot)
+            self.myo_2_charts[i] = temp_plot
+
+            # Customize plot
+            self.myo_2_charts[i].setXRange(0, NUM_GUI_SAMPLES, padding=0.075)
+            self.myo_2_charts[i].setYRange(-150, 150, padding=0)  # EMG values are signed 8-bit
+            self.myo_2_charts[i].showGrid(True, True, 0.4)
+            self.myo_2_charts[i].layout.setContentsMargins(10, 10, 40, 20)
+
+            left_axis               = self.myo_2_charts[i].getAxis("left")
+            left_axis.tickValues    = custom_y_ticks
+
+            bottom_axis = self.myo_2_charts[i].getAxis("bottom")
+            labelStyle = {'color': '#000', 'font-size': '12t'}
+            bottom_axis.setLabel(text="Sample Number", **labelStyle)
+
+            self.myo_2_charts[i].setTitle(title="Device 2 - Channel {} - EMG Amplitude".format(i + 1), size="15pt",
+                                      bold=True, color="000000")
 
         self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
         self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
@@ -117,30 +185,66 @@ class TopLevel(QWidget):
         #
         # Data Saving Options
         #
-        self.save_box = QGroupBox()                                         # Layout
-        self.save_box.setTitle("Save Data")
-        self.save_box.setStyleSheet("font-weight: bold;")
-        self.save_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.data_gen_box = QGroupBox()                                     # Layout
+        #self.data_gen_box.setObjectName("DataGroupBox")
+        #self.data_gen_box.setStyleSheet("QGroupBox#DataGroupBox { border: 2px solid black;}")
+        self.data_gen_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        save_layout         = QVBoxLayout()                                 # Line to enter save path.
-        save_button_layout  = QHBoxLayout()
-        save_layout.addWidget(QLabel("Location:"))
+        top_layout          = QVBoxLayout()
+        top_layout.setSpacing(12)
+        top_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Data Generation Box
+        inner_box = QGroupBox()
+        inner_box.setObjectName("DataInnerBox")
+        inner_box.setStyleSheet("QGroupBox#DataInnerBox { border: 1px solid black; background-color: #cccccc }")
+        box_title = QLabel("Data Generation")
+        box_title.setStyleSheet("font-weight: bold; font-size: 14pt")
+        top_layout.addWidget(box_title)
+        top_layout.addWidget(inner_box)
+        top_inner_layout    = QVBoxLayout()
+        top_inner_layout.setSpacing(10)
+        top_inner_layout.setContentsMargins(10, 10, 10, 10)
+        buttons_layout      = QHBoxLayout()                                 # "Save" and "GT Helper" buttons
+        path_layout         = QHBoxLayout()                                 # Line to enter path
+
+        line = QFrame()
+        line.setFrameShape(QFrame.HLine)
+        line.setFrameShadow(QFrame.Sunken)
+        line.setLineWidth(2)
+
+        path_title = QLabel("Output Directory")
+        path_title.setStyleSheet("font-weight: bold")
+        top_inner_layout.addWidget(path_title)                              # Line to enter path
         self.save_path      = QLineEdit()
-        save_layout.addWidget(self.save_path)
+        path_layout.addWidget(self.save_path)
 
         file_browser_button     = QPushButton("...")                        # File explorer button
         file_browser_button.clicked.connect(self.file_browser_clicked)
-        save_button_layout.addWidget(file_browser_button)
+        path_layout.addWidget(file_browser_button)
 
         self.save_data_button   = QPushButton("Save")                       # Save button
         self.save_data_button.clicked.connect(self.save_clicked)
-        save_layout.addLayout(save_button_layout)
-        save_button_layout.addWidget(self.save_data_button)
-        self.save_box.setLayout(save_layout)
-        grid.addWidget(self.save_box, 2, 0, 2, 1)
+
+        self.gt_helper_button   = QPushButton("GT Helper")                  # Ground truth button
+        #self.gt_helper_button.clicked.connect(self.gt_helper_clicked)
+        #self.gt_helper = GroundTruthHelper(self, self.gt_helper_closed)
+        #self.gt_helper.close().connect(self.closerino())
+
+        top_inner_layout.addLayout(path_layout)
+        top_inner_layout.addWidget(line)
+        top_inner_layout.addLayout(buttons_layout)
+        buttons_layout.addWidget(self.save_data_button)
+        buttons_layout.addWidget(self.gt_helper_button)
+        inner_box.setLayout(top_inner_layout)
+        self.data_gen_box.setLayout(top_layout)
+        grid.addWidget(self.data_gen_box, 2, 0, 2, 1)
 
         self.setLayout(grid)
         self.show()
+
+    def gt_helper_closed(self):
+        self.gt_helper_open = False
 
     def file_browser_clicked(self):
         """
@@ -389,6 +493,11 @@ class TopLevel(QWidget):
             self.update.setText("Saved data from one Myo device.")
             self.update.show()
 
+    def gt_helper_clicked(self):
+        if not self.gt_helper_open:
+            self.gt_helper_open = True
+            self.gt_helper.show()
+
     def resizeEvent(self, e):
         """
             Resizes text "Armband values" on resize event.
@@ -547,8 +656,9 @@ class TopLevel(QWidget):
                 self.second_myo = None
                 self.second_port = None
 
-                for i in range(len(self.myo_1_charts)):
-                    self.myo_2_charts[i].chart().removeAllSeries()
+                # Old backend:
+                # for i in range(len(self.myo_1_charts)):
+                #    self.myo_2_charts[i].chart().removeAllSeries()
             else:
                 return throw_error_message(self, "An unexpected error has occured.")
 
@@ -557,8 +667,9 @@ class TopLevel(QWidget):
                 self.first_myo = None
                 self.first_port = None
 
-                for i in range(len(self.myo_1_charts)):
-                    self.myo_1_charts[i].chart().removeAllSeries()
+                # Old backend:
+                #for i in range(len(self.myo_1_charts)):
+                #    self.myo_1_charts[i].chart().removeAllSeries()
 
             elif self.second_myo != None:
                 if (self.second_myo != None) and (self.second_myo == address):
