@@ -90,9 +90,6 @@ class TopLevel(QWidget):
         #
         # EMG Data Visualization
         #
-        self.visual_title    = QLabel("Armband Values")
-        self.visual_title.setStyleSheet("font-weight: bold;")
-        self.visual_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         # EMG data plots
         self.myo_1_layouts  = [pg.GraphicsLayoutWidget() for x in range(8)]
@@ -109,72 +106,65 @@ class TopLevel(QWidget):
         def custom_y_ticks(*args):
             return [(200.0, [-128, 0, 127]), (100.0, [-80, -40, 40, 80])]
 
+        def initialize_plots(charts_list, layouts_list, top_tab, device_num):
+            """
+                A helper function that initializes all plots (for both devices, and all channels)
+
+            :param charts_list: A list of None -> becomes a list of PlotItem
+            :param layouts_list: A list of GraphicsLayoutWidget
+            :param top_tab: A top level tab per device
+            :param device_num: The device number (1/2)
+            :return:
+            """
+
+            for i, chart in enumerate(charts_list):                       # Channels 1-8 subtabs
+
+                brush = pg.functions.mkBrush(255, 255, 255)
+                layouts_list[i].setBackgroundBrush(brush)
+
+                # Add widget to tab
+                top_tab.addTab(layouts_list[i], "Ch. " + str(i+1))
+
+                # Add plot to new widget
+                temp_plot = pg.PlotItem()
+                layouts_list[i].addItem(row=0, col=0, rowspan=1, colspan=1, item = temp_plot)
+                charts_list[i] = temp_plot
+                temp_plot.setMenuEnabled(False)
+
+                # Customize plot
+                charts_list[i].setXRange(0, NUM_GUI_SAMPLES, padding=0.075)
+                charts_list[i].setYRange(-150, 150, padding=0)  # EMG values are signed 8-bit
+                charts_list[i].showGrid(True, True, 0.6)
+                layouts_list[i].ci.setContentsMargins(10, 10, 40, 20)
+
+                left_axis               = charts_list[i].getAxis("left")
+                left_axis.tickValues    = custom_y_ticks
+                left_axis.setPen(color="333")
+
+                bottom_axis             = charts_list[i].getAxis("bottom")
+                labelStyle = {'color': '#000', 'font-size': '12pt', "font-style": "italic", "font-weight": "bold"}
+                bottom_axis.setLabel(text="Sample Number", **labelStyle)
+                bottom_axis.setPen(color="333")
+
+                charts_list[i].setTitle(title="Device {} - Channel {} - EMG Amplitude".format(device_num, i + 1),
+                                            size="15pt", bold=True, color="000088")
+
         # Plot formatting (device one)
-        self.myo_1_tab      = QTabWidget()                                  # Myo device 1 tab
-        for i, chart in enumerate(self.myo_1_charts):                       # Channels 1-8 subtabs
-
-            brush = pg.functions.mkBrush(255, 255, 255)
-            self.myo_1_layouts[i].setBackgroundBrush(brush)
-
-            # Add widget to tab
-            self.myo_1_tab.addTab(self.myo_1_layouts[i], "Ch. " + str(i+1))
-
-            # Add plot to new widget
-            temp_plot = pg.PlotItem()
-            self.myo_1_layouts[i].addItem(row=0, col=0, rowspan=1, colspan=1, item = temp_plot)
-            self.myo_1_charts[i] = temp_plot
-            temp_plot.setMenuEnabled(False)
-
-            # Customize plot
-            self.myo_1_charts[i].setXRange(0, NUM_GUI_SAMPLES, padding=0.075)
-            self.myo_1_charts[i].setYRange(-150, 150, padding=0)  # EMG values are signed 8-bit
-            self.myo_1_charts[i].showGrid(True, True, 0.6)
-            self.myo_1_layouts[i].ci.setContentsMargins(10, 10, 40, 20)
-
-            left_axis               = self.myo_1_charts[i].getAxis("left")
-            left_axis.tickValues    = custom_y_ticks
-            left_axis.setPen(color="333")
-
-            bottom_axis             = self.myo_1_charts[i].getAxis("bottom")
-            labelStyle = {'color': '#000', 'font-size': '12t', "font-style": "italic", "font-weight": "bold"}
-            bottom_axis.setLabel(text="Sample Number", **labelStyle)
-            bottom_axis.setPen(color="333")
-
-            self.myo_1_charts[i].setTitle(title="Device 1 - Channel {} - EMG Amplitude".format(i + 1), size="15pt",
-                                        bold=True, color="000088")
+        self.myo_1_tab = QTabWidget()  # Myo device 1 tab
+        self.myo_1_tab.setStyleSheet("font-weight: normal;")
+        initialize_plots(self.myo_1_charts, self.myo_1_layouts, self.myo_1_tab, 1)
 
         # Plot formatting (device two)
         self.myo_2_tab    = QTabWidget()
-        for i, chart in enumerate(self.myo_2_charts):                       # Myo device 2 tab
-            # Add widget to tab
-            self.myo_2_tab.addTab(self.myo_2_layouts[i], "Ch. " + str(i + 1))
+        self.myo_2_tab.setStyleSheet("font-weight: normal;")
+        initialize_plots(self.myo_2_charts, self.myo_2_layouts, self.myo_2_tab, 2)
 
-            # Add plot to new widget
-            temp_plot = pg.PlotItem()
-            self.myo_2_layouts[i].addPlot(row=0, col=0, rowspan=1, colspan=1, item=temp_plot)
-            self.myo_2_charts[i] = temp_plot
-
-            # Customize plot
-            self.myo_2_charts[i].setXRange(0, NUM_GUI_SAMPLES, padding=0.075)
-            self.myo_2_charts[i].setYRange(-150, 150, padding=0)  # EMG values are signed 8-bit
-            self.myo_2_charts[i].showGrid(True, True, 0.4)
-            self.myo_2_charts[i].layout.setContentsMargins(10, 10, 40, 20)
-
-            left_axis               = self.myo_2_charts[i].getAxis("left")
-            left_axis.tickValues    = custom_y_ticks
-
-            bottom_axis = self.myo_2_charts[i].getAxis("bottom")
-            labelStyle = {'color': '#000', 'font-size': '12t'}
-            bottom_axis.setLabel(text="Sample Number", **labelStyle)
-
-            self.myo_2_charts[i].setTitle(title="Device 2 - Channel {} - EMG Amplitude".format(i + 1), size="15pt",
-                                      bold=True, color="000000")
-
+        self.top_tab.setStyleSheet("font-weight: bold;")
         self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
         self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
 
-        grid.addWidget(self.visual_title, 0, 1, Qt.AlignBottom)             # Layout
-        grid.addWidget(self.top_tab, 1, 1, 3, 1)
+        # Plot layout
+        grid.addWidget(self.top_tab, 0, 1, 4, 1)
         grid.setRowStretch(0, 1)
         grid.setRowStretch(1, 20)
         grid.setRowStretch(2, 5)
@@ -185,7 +175,7 @@ class TopLevel(QWidget):
         #
         # Data Saving Options
         #
-        self.data_gen_box = QGroupBox()                                     # Layout
+        self.data_gen_box = QGroupBox()                                     # Data Saving Options layout
         #self.data_gen_box.setObjectName("DataGroupBox")
         #self.data_gen_box.setStyleSheet("QGroupBox#DataGroupBox { border: 2px solid black;}")
         self.data_gen_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -197,7 +187,8 @@ class TopLevel(QWidget):
         # Data Generation Box
         inner_box = QGroupBox()
         inner_box.setObjectName("DataInnerBox")
-        inner_box.setStyleSheet("QGroupBox#DataInnerBox { border: 1px solid black; background-color: #cccccc }")
+        inner_box.setStyleSheet("QGroupBox#DataInnerBox { border: 1px solid gray; background-color: #cccccc;"
+                                "                             border-radius: 7px;}")
         box_title = QLabel("Data Generation")
         box_title.setStyleSheet("font-weight: bold; font-size: 14pt")
         top_layout.addWidget(box_title)
@@ -205,13 +196,14 @@ class TopLevel(QWidget):
         top_inner_layout    = QVBoxLayout()
         top_inner_layout.setSpacing(10)
         top_inner_layout.setContentsMargins(10, 10, 10, 10)
+
         buttons_layout      = QHBoxLayout()                                 # "Save" and "GT Helper" buttons
         path_layout         = QHBoxLayout()                                 # Line to enter path
 
-        line = QFrame()
-        line.setFrameShape(QFrame.HLine)
-        line.setFrameShadow(QFrame.Sunken)
-        line.setLineWidth(2)
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setLineWidth(2)
 
         path_title = QLabel("Output Directory")
         path_title.setStyleSheet("font-weight: bold")
@@ -227,12 +219,11 @@ class TopLevel(QWidget):
         self.save_data_button.clicked.connect(self.save_clicked)
 
         self.gt_helper_button   = QPushButton("GT Helper")                  # Ground truth button
-        #self.gt_helper_button.clicked.connect(self.gt_helper_clicked)
-        #self.gt_helper = GroundTruthHelper(self, self.gt_helper_closed)
-        #self.gt_helper.close().connect(self.closerino())
+        self.gt_helper_button.clicked.connect(self.gt_helper_clicked)
+        self.gt_helper = GroundTruthHelper(close_function=self.gt_helper_closed)
 
         top_inner_layout.addLayout(path_layout)
-        top_inner_layout.addWidget(line)
+        top_inner_layout.addWidget(separator)
         top_inner_layout.addLayout(buttons_layout)
         buttons_layout.addWidget(self.save_data_button)
         buttons_layout.addWidget(self.gt_helper_button)
@@ -497,25 +488,6 @@ class TopLevel(QWidget):
         if not self.gt_helper_open:
             self.gt_helper_open = True
             self.gt_helper.show()
-
-    def resizeEvent(self, e):
-        """
-            Resizes text "Armband values" on resize event.
-        :param e: A resize event
-        :return: None
-        """
-        cur_font    = self.visual_title.font()
-        metrics     = QFontMetrics(cur_font)
-
-        size    = metrics.size(0, self.visual_title.text())
-        width   = self.visual_title.width() / (size.width() * 1.75)
-        height  = self.visual_title.height() / (size.height() * 1.75)
-
-        factor  = (width + height) / 1.75
-
-        cur_font.setPointSizeF(cur_font.pointSizeF() * factor)
-        self.visual_title.setFont(cur_font)
-
 
 
     def find_ports(self):

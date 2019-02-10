@@ -2,13 +2,15 @@
 # PyQt5 imports
 #
 from PyQt5.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
-                                QGridLayout, QSizePolicy)
+                                QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage)
 from PyQt5.QtGui import QPixmap, QFontMetrics
 from PyQt5.QtCore import Qt, QSize, QThreadPool, QObject, pyqtSignal, QUrl
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaPlaylist, QMediaContent
+from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
+from os.path import join, exists
 # from PyQt5.QtChart import QLineSeries, QValueAxis
+
 
 #
 # Miscellaneous imports
@@ -20,7 +22,7 @@ import time
 # Submodules in this repository
 #
 from param import *
-from backgroundworker import MyoDataWorker
+from backgroundworker import MyoDataWorker, GroundTruthWorker
 
 
 class MyoFoundWidget(QWidget):
@@ -202,6 +204,8 @@ class MyoFoundWidget(QWidget):
 
     def on_new_data(self):
         """
+            On each new data sample collected, this function is triggered by a ChartUpdate event, specifically,
+                a dataUpdate signal.
 
             :return: None
         """
@@ -250,74 +254,326 @@ class MyoFoundWidget(QWidget):
             #         series.attachAxis(self.xaxis_list[i])
 
 
-class GroundTruthHelper(QWidget):
+class GroundTruthHelper(QMainWindow):
+    """
+
+    """
     def __init__(self, parent=None, close_function=None):
-        #super(GroundTruthHelper, self).__init__(parent)
-        super().__init__()
+        """
+
+        :param parent:
+        :param close_function:
+        """
+        super(GroundTruthHelper, self).__init__(parent)
 
         self.close_event = self.Exit()
         if close_function is not None:
             self.close_event.exitClicked.connect(close_function)
+
+
+        # Each video path has the following format:
+        #   -> (1, 2, 3):
+        #       1: Path relative to video_dir
+        #       2: Minimum video number in specified path
+        #       3. Maximum video number in specified path
+        #
+        self.video_dir              = "../gesture_videos"
+        self.video_path_template    = [
+                                        ("arrows/exercise_a/a{}.mp4", 12),
+                                        ("arrows/exercise_b/b{}.mp4", 17),
+                                        ("arrows/exercise_c/c{}.mp4", 23)
+                                    ]
+        self.sleep_period           = 2 # seconds
+
+        # States
+        self.playing            = False
+        self.all_video_paths    = None
+        self.worker             = None
 
         self.initUI()
 
     def initUI(self):
         self.setGeometry(0, 0, 1024, 768)
 
-        self.grid   = QGridLayout()
+        # Contains all widgets within this main window
+        top_level_widget = QWidget(self)
+        self.setCentralWidget(top_level_widget)
+        top_layout = QGridLayout()
+        top_layout.setContentsMargins(10, 10, 10, 10)
+        top_layout.setSpacing(12)
 
-        # Title
-        gt_title  = QLabel("Ground Truth Helper")
-        gt_title.setStyleSheet("font-weight: bold;")
-        gt_title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        self.grid.addWidget(gt_title, 0, 1, 1, 1)
+        # Top Text
+        self.status_label   = QLabel("Waiting to Start...")
+        self.status_label.setStyleSheet(" font-weight: bold; font-size: 18pt; "
+                                        "   color: red;")
+        self.status_label.setAlignment(Qt.AlignCenter)
+        self.progress_label = QLabel("0.0s (1 / 1)")
+        self.progress_label.setStyleSheet(" font-size: 16pt; color: black;")
+        self.progress_label.setAlignment(Qt.AlignCenter)
 
-        # Start button
-        start_button   = QPushButton("Start")
-        start_button.clicked.connect(self.start_videos)
-        self.grid.addWidget(start_button, 1, 2, 1, 1)
-
-        # Video Player
-        self.player      = QMediaPlayer()
-        playlist    = QMediaPlaylist(self.player)
-        playlist.addMedia(QMediaContent(QUrl.fromLocalFile("/home/skmiec/Downloads/final/arrows/exercise_a/a1.mp4")))
-        playlist.addMedia(QMediaContent(QUrl.fromLocalFile("/home/skmiec/Downloads/final/arrows/exercise_a/a2.mp4")))
-
+        # Video box
+        self.setWindowTitle("Ground Truth Helper")
+        self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
         videoWidget = QVideoWidget()
-        self.player.setVideoOutput(videoWidget)
-        self.grid.addWidget(videoWidget, 2, 2, 1, 1)
 
-        videoWidget.show()
-        playlist.setCurrentIndex(1)
-        #player.play()
+        # Description Box
+        description_box = QGroupBox()
+        description_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        description_box.setContentsMargins(0, 0, 0, 0)
+        desc_layout     = QVBoxLayout()
+        desc_layout.setContentsMargins(0, 0, 0, 0)
+        desc_layout.setSpacing(0)
 
-        #self.grid.setRowStretch(0, 1)
-        #self.grid.setRowStretch(1, 1)
-        #self.grid.setColumnStretch(0, 1)
-        #self.grid.setColumnStretch(1, 1)
+        self.desc_title      = QLabel("No Movement")
+        self.desc_title.setStyleSheet("border: 4px solid gray; font-weight: bold; font-size: 14pt;")
+        self.desc_title.setAlignment(Qt.AlignCenter)
+        self.desc_explain    = QTextEdit("No description available.")
+        self.desc_explain.setStyleSheet("border: 4px solid gray; font-size: 12pt; border-color: black;")
+        self.desc_explain.setReadOnly(True)
 
-        self.setLayout(self.grid)
+        desc_layout.addWidget(self.desc_title)
+        desc_layout.addWidget(self.desc_explain)
+        desc_layout.setStretchFactor(self.desc_title, 1)
+        desc_layout.setStretchFactor(self.desc_explain, 9)
+        description_box.setLayout(desc_layout)
+
+        # Start, Pause, Stop Buttons
+        start_stop_box      = QGroupBox()
+        start_stop_box.setContentsMargins(0, 0, 0, 0)
+        start_stop_box.setObjectName("StartBox")
+        #start_stop_box.setStyleSheet("QGroupBox#StartBox { border: 2px solid gray; border-radius: 10px;"
+        #                             "                       border-color: black;}")
+        start_box_layout    = QGridLayout()
+
+        self.current_movement = QLabel("")
+        self.current_movement.setAlignment(Qt.AlignCenter)
+        self.current_movement.setStyleSheet("background-color: #cccccc; border: 1px solid gray; font-size: 14pt;"
+                                            "   font-weight: bold;")
+        start_box_layout.addWidget(self.current_movement, 0, 1, 1, 3)
+
+        self.play_button = QPushButton()
+        self.play_button.setText("Start")
+        self.play_button.setStyleSheet("font-weight: bold;")
+        self.play_button.clicked.connect(self.start_videos)
+        self.pause_button = QPushButton()
+        self.pause_button.setText("Pause")
+        self.pause_button.setStyleSheet("font-weight: bold;")
+        self.pause_button.clicked.connect(self.pause_videos)
+        self.stop_button = QPushButton()
+        self.stop_button.setText("Stop")
+        self.stop_button.setStyleSheet("font-weight: bold;")
+        self.stop_button.clicked.connect(self.stop_videos)
+        start_box_layout.addWidget(self.play_button, 2, 1)
+        start_box_layout.addWidget(self.pause_button, 2, 2)
+        start_box_layout.addWidget(self.stop_button, 2, 3)
+
+        separator = QFrame()
+        separator.setFrameShape(QFrame.HLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        separator.setLineWidth(2)
+        start_box_layout.addWidget(separator, 1, 1, 1, 3)
+
+        start_stop_box.setLayout(start_box_layout)
+        start_box_layout.setColumnStretch(0, 10)
+        start_box_layout.setColumnStretch(1, 10)
+        start_box_layout.setColumnStretch(2, 10)
+        start_box_layout.setColumnStretch(3, 10)
+        start_box_layout.setColumnStretch(4, 10)
+        start_box_layout.setRowStretch(0, 1)
+        start_box_layout.setRowStretch(1, 1)
+        start_box_layout.setRowStretch(2, 1)
+
+        # Training Session Parameters
+        parameters_box = QGroupBox()
+        parameters_box.setTitle("Collection Parameters")
+        parameters_box.setObjectName("CollecParamBox")
+        parameters_box.setStyleSheet("QGroupBox#CollecParamBox { border: 1px solid gray; border-radius: 7px; margin-top: 0.5em;"
+                                     "                              font-weight: bold; }"
+                                     "QGroupBox#CollecParamBox::title { subcontrol-origin: margin; left: 9px; }")
+        parameters_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        top_param_layout    = QGridLayout()
+
+        rep_title       = QLabel("Number of Repetitions")
+        self.num_reps   = QLineEdit("6")
+        top_param_layout.addWidget(rep_title, 0, 0)
+        top_param_layout.addWidget(self.num_reps, 0, 2, 1, 2)
+        top_param_layout.setSpacing(0)
+
+        collect_title   = QLabel("(<b>Collect</b>\\<b>Rest</b>) Duration")
+        self.collect_entry   = QLineEdit("5.0")
+        self.rest_entry      = QLineEdit("5.0")
+        top_param_layout.addWidget(collect_title, 1, 0)
+        top_param_layout.addWidget(self.collect_entry, 1, 2)
+        top_param_layout.addWidget(self.rest_entry, 1, 3)
+
+        ex_label = QLabel("Exercise (<b>A</b>\\<b>B</b>\\<b>C</b>)")
+        check_layout = QHBoxLayout()
+        check_layout.setSpacing(0)
+        check_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.ex_a_check = QCheckBox()
+        self.ex_a_check.setChecked(True)
+        self.ex_b_check = QCheckBox()
+        self.ex_b_check.setChecked(True)
+        self.ex_c_check = QCheckBox()
+        self.ex_c_check.setChecked(True)
+        check_layout.addWidget(self.ex_a_check)
+        check_layout.addWidget(self.ex_b_check)
+        check_layout.addWidget(self.ex_c_check)
+        top_param_layout.addWidget(ex_label, 2, 0)
+        top_param_layout.addLayout(check_layout, 2, 2, 1, 2)
+        top_param_layout.setColumnStretch(0, 5)
+        top_param_layout.setColumnStretch(1, 1)
+        top_param_layout.setColumnStretch(2, 3)
+        top_param_layout.setColumnStretch(3, 3)
+        parameters_box.setLayout(top_param_layout)
+
+        # Positions and sizes of all widgets in grid layout
+        top_layout.addWidget(self.status_label, 0, 0)
+        top_layout.addWidget(self.progress_label, 0, 1)
+        top_layout.addWidget(videoWidget, 1, 0)
+        top_layout.addWidget(description_box, 1, 1)
+        top_layout.addWidget(start_stop_box, 2, 0)
+        top_layout.addWidget(parameters_box, 2, 1)
+        top_layout.setRowStretch(0, 7)
+        top_layout.setRowStretch(1, 100)
+        top_layout.setRowStretch(2, 10)
+        top_layout.setColumnStretch(0, 66)
+        top_layout.setColumnStretch(1, 33)
+
+        # Set widget to contain window contents
+        top_level_widget.setLayout(top_layout)
+        self.video_player.setVideoOutput(videoWidget)
+        self.video_player.setMuted(True)
 
     def start_videos(self):
-        self.player.play()
 
-    # def resizeEvent(self, e):
-    #     """
-    #         Resizes title text on resize event.
-    #     :param e: A resize event
-    #     :return: None
-    #     """
-    #     cur_font    = self.gt_title.font()
-    #     metrics     = QFontMetrics(cur_font)
-    #
-    #     size    = metrics.size(0, self.gt_title.text())
-    #     width   = self.gt_title.width() / (size.width() * 1.75)
-    #     height  = self.gt_title.height() / (size.height() * 1.75)
-    #
-    #     factor  = (width + height) / 1.75
-    #
-    #     cur_font.setPointSizeF(cur_font.pointSizeF() * factor)
-    #     self.gt_title.setFont(cur_font)
+        if self.playing:
+            return
+
+        if self.worker is not None:
+            self.worker.force_unpause()
+            time.sleep(self.sleep_period)
+            self.playing = True
+            return
+
+        #
+        # Check for valid inputs
+        #
+        def throw_error_message(self, message):
+            self.warning = QErrorMessage()
+            self.warning.showMessage(message)
+            self.warning.show()
+            return None
+
+        def acquire_var(self, text, widget_name, func):
+            try:
+                temp = func(text)
+            except:
+                if func == float:
+                    return throw_error_message(self, "Please set a valid float for \"{}\".".format(widget_name))
+                else:
+                    return throw_error_message(self, "Please set a valid integer for \"{}\".".format(widget_name))
+            return temp
+
+        if ((acquire_var(self, self.collect_entry.text(), "Collect Duration", float) is None) or
+                (acquire_var(self, self.collect_entry.text(), "Rest Duration", float) is None) or
+                (acquire_var(self, self.num_reps.text(), "Number of Repetitions", int) is None)):
+            return
+
+        self.collect_duration   = acquire_var(self, self.collect_entry.text(), "Collect Duration", float)
+        self.rest_duration      = acquire_var(self, self.rest_entry.text(), "Rest Duration", float)
+        self.repetitions        = acquire_var(self, self.num_reps.text(), "Rest Duration", int)
+
+        if (not self.ex_a_check.isChecked()) and (not self.ex_b_check.isChecked()) and (not self.ex_c_check.isChecked()):
+            return throw_error_message(self, "Please select at least one exercise.")
+
+        if self.collect_duration < 1.0:
+            return throw_error_message(self, "Please select a collect duration >= 1.0s.")
+        if self.rest_duration < 1.0:
+            return throw_error_message(self, "Please select a rest duration >= 1.0s.")
+        if self.repetitions < 1:
+            return throw_error_message(self, "Please select a number of repetitions >= 1.")
+
+        #
+        # Attempt to find all videos
+        #
+        exercises_found = self.check_video_paths()
+
+        def missing_exer(self, ex_found, ex_label):
+            if not ex_found:
+                self.warning = QErrorMessage()
+                self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
+                self.warning.show()
+            return ex_found
+
+        if ((not missing_exer(self, exercises_found[0], "A")) or (not missing_exer(self, exercises_found[1], "B")) or
+                (not missing_exer(self, exercises_found[2], "C"))):
+            return
+
+        #
+        # Start playing videos, and updating text fields, via background thread
+        #
+        self.worker = GroundTruthWorker(self.status_label, self.progress_label, self.desc_title, self.desc_explain,
+                                            self.current_movement, self.video_player, self.all_video_paths,
+                                            self.collect_duration, self.rest_duration, self.repetitions)
+        QThreadPool.globalInstance().start(self.worker)
+        time.sleep(self.sleep_period)
+
+        self.playing = True
+
+    def pause_videos(self):
+        if not self.playing:
+            return
+
+        self.worker.force_pause()
+        time.sleep(self.sleep_period)
+        self.playing = False
+
+    def stop_videos(self):
+        if not self.playing:
+            return
+
+        self.worker.force_stop()
+        time.sleep(self.sleep_period)
+        self.worker  = None
+        self.playing = False
+
+    def check_video_paths(self):
+        """
+
+        :return:
+        """
+
+        exercises_found         = [True, True, True]
+        self.all_video_paths    = [("A", []), ("B", []), ("C", [])]
+
+        def create_exercise_paths(self, ex_label):
+            ex_index        = ord(ex_label) - ord('A')
+            found_videos    = True
+            path_template   = join(self.video_dir, self.video_path_template[ex_index][0])
+            max_idx         = self.video_path_template[ex_index][1]
+            ex_path_created = []
+
+            for i in range(1, max_idx + 1):
+                full_path = path_template.format(i)
+                ex_path_created.append(full_path)
+
+                if not exists(full_path):
+                    found_videos = False
+                    break
+
+            self.all_video_paths[ex_index][1].extend(ex_path_created)
+            return found_videos
+
+        if self.ex_a_check.isChecked():
+            exercises_found[0] = create_exercise_paths(self, "A")
+        if self.ex_b_check.isChecked():
+            exercises_found[1] = create_exercise_paths(self, "B")
+        if self.ex_c_check.isChecked():
+            exercises_found[2] = create_exercise_paths(self, "C")
+
+        return exercises_found
 
     #
     # Used by TopLevel widget
@@ -331,4 +587,10 @@ class GroundTruthHelper(QWidget):
     # Used for data logging
     #
     def get_current_label(self):
-        pass
+        if self.worker is None:
+            return 0
+        else:
+            if self.worker.current_label is None:
+                return 0
+            else:
+                return self.worker.current_label
