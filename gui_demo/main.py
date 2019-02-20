@@ -160,8 +160,6 @@ class TopLevel(QWidget):
         initialize_plots(self.myo_2_charts, self.myo_2_layouts, self.myo_2_tab, 2)
 
         self.top_tab.setStyleSheet("font-weight: bold;")
-        self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
-        self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
 
         # Plot layout
         grid.addWidget(self.top_tab, 0, 1, 4, 1)
@@ -627,6 +625,7 @@ class TopLevel(QWidget):
             if (self.second_myo != None) and (self.second_myo == address):
                 self.second_myo = None
                 self.second_port = None
+                self.top_tab.removeTab(0)
 
                 # Old backend:
                 # for i in range(len(self.myo_1_charts)):
@@ -638,6 +637,7 @@ class TopLevel(QWidget):
             if self.first_myo == address:
                 self.first_myo = None
                 self.first_port = None
+                self.top_tab.removeTab(0)
 
                 # Old backend:
                 #for i in range(len(self.myo_1_charts)):
@@ -647,6 +647,7 @@ class TopLevel(QWidget):
                 if (self.second_myo != None) and (self.second_myo == address):
                     self.second_myo = None
                     self.second_port = None
+                    self.top_tab.removeTab(1)
 
                     for i in range(len(self.myo_1_charts)):
                         self.myo_2_charts[i].chart().removeAllSeries()
@@ -685,6 +686,7 @@ class TopLevel(QWidget):
 
             self.first_myo  = address
             self.first_port = port
+            self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
             return (self.myo_1_tab.currentIndex, self.myo_1_charts, self.first_myo_data)
 
         else:
@@ -699,6 +701,8 @@ class TopLevel(QWidget):
             else:
                 self.second_myo     = address
                 self.second_port    = port
+
+                self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
                 return (self.myo_2_tab.currentIndex, self.myo_2_charts, self.second_myo_data)
 
 

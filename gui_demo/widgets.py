@@ -4,7 +4,7 @@
 from PyQt5.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
                                 QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage)
 from PyQt5.QtGui import QPixmap, QFontMetrics
-from PyQt5.QtCore import Qt, QSize, QThreadPool, QObject, pyqtSignal, QUrl
+from PyQt5.QtCore import Qt, QSize, QThreadPool, QObject, pyqtSignal, QUrl, QThread
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
@@ -45,9 +45,12 @@ class MyoFoundWidget(QWidget):
         self.connected          = False
         self.performing_action  = False
 
+        # Configurable parameters
+        self.num_trim_samples   = 400   # On unexpected disconnect, or user-initiated disconnect, trim this many samples
+                                        #       from the list of all collected data thus far.
+
         self.connect_notify     = connect_notify
         self.disconnect_notify  = disconnect_notify
-        self.sleep_period       = 1 # Seconds
         self.initUI()
 
     def initUI(self):
@@ -98,27 +101,6 @@ class MyoFoundWidget(QWidget):
         topLayout.addLayout(enableLayout)
         self.setLayout(topLayout)
 
-    def disconnect_with_myo(self):
-        """
-            A helper function to disconnect from a Myo device.
-        :return: None
-        """
-        self.connected          = False
-        self.worker.running     = False
-        self.enable_text.setText("Enable: ")
-        self.enable_box.setCheckState(Qt.Unchecked)
-
-        while not self.worker.exiting:
-            time.sleep(self.sleep_period)
-
-        # Old backend:
-        #
-        #for i in range(len(self.measurements_list)):
-        #    self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
-        #    self.chart_list[i].chart().removeAxis(self.yaxis_list[i])
-
-        self.disconnect_notify(self.myo_device["sender_address"].hex())
-
     def connect_with_myo(self):
         """
             On a click event to the "Enable/Disable: " checkbox, this function is called and:
@@ -129,10 +111,11 @@ class MyoFoundWidget(QWidget):
 
         :return: None
         """
+        self.enable_box.setEnabled(False)
 
         # Must be a second click => disconnect
         if self.connected:
-            self.disconnect_with_myo()
+            self.worker.running = False
             return
 
         #
@@ -141,30 +124,28 @@ class MyoFoundWidget(QWidget):
         connection_contents = self.connect_notify(self.myo_device["sender_address"].hex(), self.port)
         if connection_contents is None:
             self.enable_box.setCheckState(Qt.Unchecked)
+            self.enable_box.setEnabled(True)
             return
 
         self.tab_open   = connection_contents[0]
         self.chart_list = connection_contents[1]
         self.data_list  = connection_contents[2]
 
-
         #
         # Prepare EMG visualization
         #
-        self.data_list.clear()
-
         # Data to be collected
-        self.samples_count = 0
+        self.samples_count      = 0
         self.measurements_list  = [[] for x in range(8)]
-        self.plotted_data       = [None for x in range(8)]
         self.data_indices       = []
+        self.plotted_data       = [None for x in range(8)]
 
         # Old backend:
         #
         # self.measurements_list = [QLineSeries() for x in range(8)]
         #
         # Add a legend to each chart, and connect data (series) to charts
-        #for i, series in enumerate(self.measurements_list):
+        # for i, series in enumerate(self.measurements_list):
         #    self.chart_list[i].chart().legend().setVisible(False)
         #    self.chart_list[i].chart().addSeries(series)
         #
@@ -172,6 +153,22 @@ class MyoFoundWidget(QWidget):
         # self.xaxis_list = [QValueAxis() for x in range(8)]
         # self.yaxis_list = [QValueAxis() for x in range(8)]
 
+        # for i, series in enumerate(self.measurements_list):
+        #    series.attachAxis(self.xaxis_list[i])
+        #    series.attachAxis(self.yaxis_list[i])
+
+        #
+        # Begin the process of connecting and collecting data
+        #
+        self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
+                                        self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
+                                        self.on_worker_stopped, self.connect_failed, self.on_discon_occurred)
+        QThreadPool.globalInstance().start(self.worker)
+
+    def on_worker_started(self):
+        # Update states
+        self.enable_text.setText("Disable: ")
+        self.connected = True
 
         for i, series in enumerate(self.measurements_list):
             # self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
@@ -182,25 +179,69 @@ class MyoFoundWidget(QWidget):
 
             # Generate an initial, empty plot --> update data later
             self.plotted_data[i] = self.chart_list[i].plot(self.data_indices, self.measurements_list[i],
-                                                            pen=pg.functions.mkPen("08E", width=2),
-                                                            symbol='o', symbolSize=SYMBOL_SIZE)
+                                                           pen=pg.functions.mkPen("08E", width=2),
+                                                           symbol='o', symbolSize=SYMBOL_SIZE)
+        self.enable_box.setEnabled(True)
 
-        #for i, series in enumerate(self.measurements_list):
-        #    series.attachAxis(self.xaxis_list[i])
-        #    series.attachAxis(self.yaxis_list[i])
+    def on_discon_occurred(self):
+        self.connected = False
+        self.enable_text.setText("Enable: ")
+        self.enable_box.setCheckState(Qt.Unchecked)
 
+        # Trim potentially useless data
+        num_samples = len(self.data_list)
+        if self.num_trim_samples >= num_samples:
+            self.data_list = []
+        else:
+            self.data_list = self.data_list[:num_samples - self.num_trim_samples]
+
+        self.warning = QErrorMessage()
+        self.warning.showMessage("Myo armband device disconnected unexpectedly.")
+        self.warning.show()
+
+        self.disconnect_notify(self.myo_device["sender_address"].hex())
+        self.enable_box.setEnabled(True)
+
+    def connect_failed(self):
+        """
+            A helper function to disconnect from a Myo device.
+        :return: None
+        """
+        self.connected = False
+        self.enable_text.setText("Enable: ")
+        self.enable_box.setCheckState(Qt.Unchecked)
+
+        self.warning = QErrorMessage()
+        self.warning.showMessage("Unable to connect to Myo armband device.")
+        self.warning.show()
+
+        self.disconnect_notify(self.myo_device["sender_address"].hex())
+        self.enable_box.setEnabled(True)
+
+    def on_worker_stopped(self):
+        """
+            A helper function to disconnect from a Myo device.
+        :return: None
+        """
+        self.connected = False
+        self.enable_text.setText("Enable: ")
+        self.enable_box.setCheckState(Qt.Unchecked)
+
+        # Trim potentially useless data
+        num_samples = len(self.data_list)
+        if self.num_trim_samples >= num_samples:
+            self.data_list = []
+        else:
+            self.data_list = self.data_list[:num_samples - self.num_trim_samples]
+
+        # Old backend:
         #
-        # Begin the process of connecting and collecting data
-        #
-        self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
-                                        self.on_axes_update, self.on_new_data, self.data_list)
-        QThreadPool.globalInstance().start(self.worker)
-        while not self.worker.running:
-            time.sleep(self.sleep_period)
+        # for i in range(len(self.measurements_list)):
+        #    self.chart_list[i].chart().removeAxis(self.xaxis_list[i])
+        #    self.chart_list[i].chart().removeAxis(self.yaxis_list[i])
 
-        # Update states
-        self.enable_text.setText("Disable: ")
-        self.connected          = True
+        self.disconnect_notify(self.myo_device["sender_address"].hex())
+        self.enable_box.setEnabled(True)
 
     def on_new_data(self):
         """

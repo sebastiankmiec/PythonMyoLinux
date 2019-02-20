@@ -23,9 +23,13 @@ from movements import MOVEMENT_DESC
 #
 class MyoSearch(QObject):
     searchComplete = pyqtSignal()
-class ChartUpdate(QObject):
-    axesUpdate = pyqtSignal()
-    dataUpdate = pyqtSignal()
+class DataWorkerUpdate(QObject):
+    axesUpdate      = pyqtSignal()
+    dataUpdate      = pyqtSignal()
+    workerStarted   = pyqtSignal()
+    workerStopped   = pyqtSignal()
+    connectFailed   = pyqtSignal()
+    disconOccurred  = pyqtSignal()
 
 class MyoDataWorker(QRunnable):
     """
@@ -35,7 +39,8 @@ class MyoDataWorker(QRunnable):
             3) Collects data from a Myo armband device
             4) Optionally, disconnects on a second press, halting the receipt of data
     """
-    def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list):
+    def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list,
+                    on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred):
         """
         :param port: Port used to create MyoFoundWidget widget.
         :param myo_device: Address of Myo device to interact with.
@@ -49,23 +54,30 @@ class MyoDataWorker(QRunnable):
         self.series_list    = series_list
         self.indices_list   = indices_list
         self.data_list      = data_list
-        self.update         = ChartUpdate()
+        self.update         = DataWorkerUpdate()
         self.update.axesUpdate.connect(axes_callback)
         self.update.dataUpdate.connect(data_call_back)
+        self.update.workerStarted.connect(on_worker_started)
+        self.update.workerStopped.connect(on_worker_stopped)
+        self.update.connectFailed.connect(on_connect_failed)
+        self.update.disconOccurred.connect(on_discon_occurred)
         self.scan_period    = 0.2 # seconds
 
         # States
-        self.exiting        = False
         self.running        = False
         self.samples_count  = 0
 
     def run(self):
 
         self.running = True
+        self.update.workerStarted.emit()
 
         # Connect
         self.dongle.clear_state()
-        self.dongle.connect(self.myo_device)
+        connect_success = self.dongle.connect(self.myo_device)
+        if not connect_success:
+            self.update.connectFailed.emit()
+            return
 
         # Enable IMU/EMG readings and callback functions
         self.dongle.set_sleep_mode(False)
@@ -74,11 +86,16 @@ class MyoDataWorker(QRunnable):
 
         self.dongle.add_joint_emg_imu_handler(self.create_emg_event)
 
-        while self.running:
-            self.dongle.scan_for_data_packets(self.scan_period)
-        self.dongle.clear_state()
-        self.exiting = True
+        disconnect_occurred = False
+        while self.running and (not disconnect_occurred):
+            disconnect_occurred = self.dongle.scan_for_data_packets_conditional(self.scan_period)
 
+        if disconnect_occurred:
+            self.dongle.clear_state()
+            self.update.disconOccurred.emit()
+        else:
+            self.dongle.clear_state()
+            self.update.workerStopped.emit()
 
     def create_emg_event(self, emg_list, orient_w, orient_x, orient_y, orient_z,
                                 accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3):
