@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton, QGridLayou
                                 QTabWidget, QGroupBox, QFileDialog, QMessageBox, QFrame)
 
 from PyQt5.QtGui import QFontMetrics, QIcon
-from PyQt5.QtCore import Qt, QThreadPool
+from PyQt5.QtCore import Qt, QThreadPool, QObject, pyqtSignal
 import pyqtgraph as pg
 from pyqtgraph import GraphicsLayout
 # from PyQt5.QtChart import QChartView
@@ -39,6 +39,14 @@ class TopLevel(QWidget):
         Main window containing all GUI components.
     """
 
+    #
+    # Used to cleanup background worker thread(s) (on exit)
+    #
+    class Exit(QObject):
+        exitClicked = pyqtSignal()
+    def closeEvent(self, event):
+        self.close_event.exitClicked.emit()
+
     def __init__(self):
         super().__init__()
 
@@ -64,6 +72,10 @@ class TopLevel(QWidget):
         self.increments     = 100           # Number of progress bar increments (when searching for Myo devices)
 
         self.gt_helper_open = False         # Ground truth helper
+
+        self.close_event = self.Exit()
+        self.close_event.exitClicked.connect(self.stop_background_workers)
+        self.worker_check_period = 1        # seconds
 
         self.initUI()
 
@@ -231,6 +243,51 @@ class TopLevel(QWidget):
 
         self.setLayout(grid)
         self.show()
+
+    def stop_background_workers(self):
+        #
+        # Wait on Myo search workers to complete
+        #
+        waiting_on_search = True
+        while waiting_on_search:
+
+            waiting_on_search = False
+            for worker in self.search_threads:
+                if not worker.complete:
+                    worker.running      = False
+                    waiting_on_search   = True
+                    break
+
+            if waiting_on_search:
+                time.sleep(self.worker_check_period)
+
+        #
+        # Stop data workers
+        #
+        waiting_on_search = True
+        while waiting_on_search:
+
+            waiting_on_search   = False
+            num_widgets         = self.ports_found.count()
+
+            for idx in range(num_widgets):
+
+                # Ignore port widgets (only interested in Myo device rows)
+                list_widget = self.ports_found.item(idx)
+                if hasattr(list_widget, "port_idx"):
+                    continue
+
+                myo_widget = self.ports_found.itemWidget(list_widget)
+
+                if not (myo_widget.worker is None):
+                    if not myo_widget.worker.complete:
+                        myo_widget.worker.running   = False
+                        waiting_on_search           = True
+                        break
+
+            if waiting_on_search:
+                time.sleep(self.worker_check_period)
+
 
     def gt_helper_closed(self):
         self.gt_helper_open = False

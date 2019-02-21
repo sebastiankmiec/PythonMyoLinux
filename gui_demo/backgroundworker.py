@@ -23,6 +23,7 @@ from movements import MOVEMENT_DESC
 #
 class MyoSearch(QObject):
     searchComplete = pyqtSignal()
+
 class DataWorkerUpdate(QObject):
     axesUpdate      = pyqtSignal()
     dataUpdate      = pyqtSignal()
@@ -30,6 +31,12 @@ class DataWorkerUpdate(QObject):
     workerStopped   = pyqtSignal()
     connectFailed   = pyqtSignal()
     disconOccurred  = pyqtSignal()
+
+class GTWorkerUpdate(QObject):
+    workerStarted   = pyqtSignal()
+    workerUnpaused  = pyqtSignal()
+    workerPaused    = pyqtSignal()
+    workerStopped   = pyqtSignal()
 
 class MyoDataWorker(QRunnable):
     """
@@ -59,6 +66,7 @@ class MyoDataWorker(QRunnable):
         self.battery_level  = battery_level
         self.create_event   = create_event
 
+        # Signals
         self.update.axesUpdate.connect(axes_callback)
         self.update.dataUpdate.connect(data_call_back)
         self.update.workerStarted.connect(on_worker_started)
@@ -74,6 +82,7 @@ class MyoDataWorker(QRunnable):
         # States
         self.running        = False
         self.samples_count  = 0
+        self.complete       = False
 
         # Timestamp states
         self.reset_period   = 200
@@ -81,9 +90,10 @@ class MyoDataWorker(QRunnable):
         self.base_time      = None
 
     def run(self):
-        # Setup
+        # State setup
         self.dongle     = MyoDongle(self.port)
         self.running    = True
+        self.complete   = False
         self.update.workerStarted.emit()
 
         # Connect
@@ -115,6 +125,8 @@ class MyoDataWorker(QRunnable):
         else:
             self.dongle.clear_state()
             self.update.workerStopped.emit()
+
+        self.complete = True
 
     def create_emg_event(self, emg_list, orient_w, orient_x, orient_y, orient_z,
                                 accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3, sample_num):
@@ -207,6 +219,10 @@ class MyoSearchWorker(QRunnable):
         self.finish         = MyoSearch()
         self.finish.searchComplete.connect(finished_callback)
 
+        # States
+        self.running    = False
+        self.complete   = False
+
         #
         # Configurable
         #
@@ -215,8 +231,10 @@ class MyoSearchWorker(QRunnable):
         self.currrent_increment = 0
 
     def run(self):
+        self.complete   = False
+        self.running    = True
 
-        while self.currrent_increment <= self.increments:
+        while (self.currrent_increment <= self.increments) and (self.running):
 
             if self.currrent_increment == 0:
                 self.myo_dongle = MyoDongle(self.cur_port)
@@ -245,12 +263,15 @@ class MyoSearchWorker(QRunnable):
 
         # Clear Myo device states and disconnect
         self.myo_dongle.clear_state()
+        self.running    = False
+        self.complete   = True
 
 
 class GroundTruthWorker(QRunnable):
 
     def __init__(self, status_label, progress_label, desc_title, desc_explain, cur_movement, video_player,
-                    all_video_paths, collect_duration, rest_duration, num_reps):
+                    all_video_paths, collect_duration, rest_duration, num_reps, on_worker_started, on_worker_unpaused,
+                    on_worker_paused, on_worker_stopped):
         super().__init__()
 
         self.status_label       = status_label
@@ -267,10 +288,17 @@ class GroundTruthWorker(QRunnable):
         self.num_class_A        = 12
         self.num_class_B        = 17
 
+        # Signals
+        self.update                 = GTWorkerUpdate()
+        self.update.workerStarted.connect(on_worker_started)
+        self.update.workerUnpaused.connect(on_worker_unpaused)
+        self.update.workerPaused.connect(on_worker_paused)
+        self.update.workerStopped.connect(on_worker_stopped)
+
         # Used to update time remaining
         self.timer              = QTimer()
         self.timer.timeout.connect(self.timer_update)
-        self.timer_interval     = 100 # 100ms
+        self.timer_interval     = 100                               # units of ms
         self.state_end_event    = self.StateComplete()
         self.state_end_event.stateEnded.connect(self.stop_state)
 
@@ -304,6 +332,9 @@ class GroundTruthWorker(QRunnable):
 
     def run(self):
 
+        # Re-enable video buttons
+        self.update.workerStarted.emit()
+
         for exercise in self.all_video_paths:
             ex_label    = exercise[0]
             video_paths = exercise[1]
@@ -333,7 +364,7 @@ class GroundTruthWorker(QRunnable):
                 self.set_current_label(ex_label, movement_num + 1)
 
                 while self.video_playing or self.paused:
-                    time.sleep(self.timer_interval/1000)
+                    time.sleep(self.timer_interval / 1000)
 
                 if self.stopped:
                     return
@@ -411,13 +442,20 @@ class GroundTruthWorker(QRunnable):
         self.video_player.stop()
         self.video_playing  = False
         self.stopped        = True
+        self.update.workerStopped.emit()
 
     def force_pause(self):
         self.timer.stop()
         self.video_player.pause()
         self.paused = True
 
+        # Re-enable video buttons
+        self.update.workerPaused.emit()
+
     def force_unpause(self):
         self.timer.start(self.timer_interval)
         self.video_player.play()
         self.paused = False
+
+        # Re-enable video buttons
+        self.update.workerUnpaused.emit()

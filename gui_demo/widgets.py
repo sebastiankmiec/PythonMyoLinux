@@ -337,6 +337,15 @@ class GroundTruthHelper(QMainWindow):
     """
 
     """
+
+    #
+    # Used to cleanup background worker thread (on exit)
+    #
+    class Exit(QObject):
+        exitClicked = pyqtSignal()
+    def closeEvent(self, event):
+        self.close_event.exitClicked.emit()
+
     def __init__(self, parent=None, close_function=None):
         """
 
@@ -348,6 +357,7 @@ class GroundTruthHelper(QMainWindow):
         self.close_event = self.Exit()
         if close_function is not None:
             self.close_event.exitClicked.connect(close_function)
+        self.close_event.exitClicked.connect(self.pause_videos)
 
 
         # Each video path has the following format:
@@ -362,12 +372,15 @@ class GroundTruthHelper(QMainWindow):
                                         ("arrows/exercise_b/b{}.mp4", 17),
                                         ("arrows/exercise_c/c{}.mp4", 23)
                                     ]
-        self.sleep_period           = 2 # seconds
+        #self.sleep_period           = 2 # seconds
 
         # States
         self.playing            = False
         self.all_video_paths    = None
         self.worker             = None
+        self.unpausing          = False
+        self.pausing            = False
+        self.shutdown           = False
 
         self.initUI()
 
@@ -445,6 +458,9 @@ class GroundTruthHelper(QMainWindow):
         start_box_layout.addWidget(self.play_button, 2, 1)
         start_box_layout.addWidget(self.pause_button, 2, 2)
         start_box_layout.addWidget(self.stop_button, 2, 3)
+
+        self.pause_button.setEnabled(False)
+        self.stop_button.setEnabled(False)
 
         separator = QFrame()
         separator.setFrameShape(QFrame.HLine)
@@ -525,21 +541,37 @@ class GroundTruthHelper(QMainWindow):
         self.video_player.setVideoOutput(videoWidget)
         self.video_player.setMuted(True)
 
+    def enable_video_buttons(self, state_play, state_pause, state_stop):
+        self.play_button.setEnabled(state_play)
+        self.pause_button.setEnabled(state_pause)
+        self.stop_button.setEnabled(state_stop)
+
     def start_videos(self):
 
+        # Disable play/pause/stop buttons until it is safe
+        self.enable_video_buttons(False, False, False)
+
+        # If any button click is still being processed
+        if (self.unpausing) or (self.pausing) or (self.shutdown):
+            return
+
         if self.playing:
+            self.enable_video_buttons(False, True, True)
             return
 
         if self.worker is not None:
             self.worker.force_unpause()
-            time.sleep(self.sleep_period)
-            self.playing = True
+            #time.sleep(self.sleep_period)
             return
 
         #
         # Check for valid inputs
         #
         def throw_error_message(self, message):
+            # Re-enable video buttons
+            self.enable_video_buttons(True, False, False)
+
+            # Display warning
             self.warning = QErrorMessage()
             self.warning.showMessage(message)
             self.warning.show()
@@ -549,6 +581,10 @@ class GroundTruthHelper(QMainWindow):
             try:
                 temp = func(text)
             except:
+                # Re-enable video buttons
+                self.enable_video_buttons(True, False, False)
+
+                # Display warning
                 if func == float:
                     return throw_error_message(self, "Please set a valid float for \"{}\".".format(widget_name))
                 else:
@@ -581,6 +617,10 @@ class GroundTruthHelper(QMainWindow):
 
         def missing_exer(self, ex_found, ex_label):
             if not ex_found:
+                # Re-enable video buttons
+                self.enable_video_buttons(True, False, False)
+
+                # Display warning
                 self.warning = QErrorMessage()
                 self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
                 self.warning.show()
@@ -595,28 +635,49 @@ class GroundTruthHelper(QMainWindow):
         #
         self.worker = GroundTruthWorker(self.status_label, self.progress_label, self.desc_title, self.desc_explain,
                                             self.current_movement, self.video_player, self.all_video_paths,
-                                            self.collect_duration, self.rest_duration, self.repetitions)
+                                            self.collect_duration, self.rest_duration, self.repetitions,
+                                            self.on_worker_started, self.on_worker_unpaused, self.on_worker_paused,
+                                            self.on_worker_stopped)
         QThreadPool.globalInstance().start(self.worker)
-        time.sleep(self.sleep_period)
+        #time.sleep(self.sleep_period)
 
+    def on_worker_started(self):
         self.playing = True
+        self.enable_video_buttons(False, True, True)
+
+    def on_worker_unpaused(self):
+        self.playing = True
+        self.enable_video_buttons(False, True, True)
+        self.unpausing = False
+
+    def on_worker_paused(self):
+        self.playing = False
+        self.pausing = False
+        self.enable_video_buttons(True, False, True)
+
+    def on_worker_stopped(self):
+        self.worker     = None
+        self.playing    = False
+        self.shutdown   = False
+        self.enable_video_buttons(True, False, False)
 
     def pause_videos(self):
-        if not self.playing:
+        if (not self.playing) or (self.pausing) or (self.shutdown):
             return
+        self.enable_video_buttons(False, False, False)
+        self.pausing = True
 
         self.worker.force_pause()
-        time.sleep(self.sleep_period)
-        self.playing = False
+        #time.sleep(self.sleep_period)
 
     def stop_videos(self):
-        if not self.playing:
+        if (not self.playing) or (self.shutdown):
             return
+        self.enable_video_buttons(False, False, False)
+        self.shutdown = True
 
         self.worker.force_stop()
-        time.sleep(self.sleep_period)
-        self.worker  = None
-        self.playing = False
+        #time.sleep(self.sleep_period)
 
     def check_video_paths(self):
         """
@@ -654,13 +715,6 @@ class GroundTruthHelper(QMainWindow):
 
         return exercises_found
 
-    #
-    # Used by TopLevel widget
-    #
-    class Exit(QObject):
-        exitClicked = pyqtSignal()
-    def closeEvent(self, event):
-        self.close_event.exitClicked.emit()
 
     #
     # Used for data logging
