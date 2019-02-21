@@ -522,7 +522,7 @@ class TopLevel(QWidget):
                 continue
 
             port_list_entry = QListWidgetItem(port_attr["device"])
-            port_list_entry.setIcon(QIcon(join(abspath(__file__).replace("main.py", ""), "icons/sp.png")))
+            port_list_entry.setIcon(QIcon(join(abspath(__file__).replace("gui_main.py", ""), "icons/sp.png")))
             port_list_entry.port_idx    = ports_found
             port_list_entry.port        = port_attr["device"]
             self.ports_found.insertItem(ports_found, port_list_entry);
@@ -649,8 +649,9 @@ class TopLevel(QWidget):
                     self.second_port = None
                     self.top_tab.removeTab(1)
 
-                    for i in range(len(self.myo_1_charts)):
-                        self.myo_2_charts[i].chart().removeAllSeries()
+                    # Old backend:
+                    #for i in range(len(self.myo_1_charts)):
+                    #    self.myo_2_charts[i].chart().removeAllSeries()
                 else:
                     return throw_error_message(self, "An unexpected error has occured.")
 
@@ -678,8 +679,7 @@ class TopLevel(QWidget):
             if self.second_myo != None:
 
                 if self.second_myo == address:
-                    return throw_error_message(self,
-                                       "The device you attempted to connect to is already connected.")
+                    return throw_error_message(self, "The device you attempted to connect to is already connected.")
                 elif port == self.second_port:
                     return throw_error_message(self, "The device you attempted to connect to, requires a port that"
                                              " is already in use.")
@@ -687,14 +687,14 @@ class TopLevel(QWidget):
             self.first_myo  = address
             self.first_port = port
             self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
-            return (self.myo_1_tab.currentIndex, self.myo_1_charts, self.first_myo_data)
+
+            return (self.top_tab.currentIndex, None, self.myo_1_tab.currentIndex, self.myo_1_charts, self.first_myo_data)
 
         else:
             if self.second_myo != None:
                 return throw_error_message(self, "This GUI only currently supports up to two Myo devices.")
             elif self.first_myo == address:
-                return throw_error_message(self,
-                                           "The device you attempted to connect to is already connected.")
+                return throw_error_message(self, "The device you attempted to connect to is already connected.")
             elif port == self.first_port:
                 return throw_error_message(self, "The device you attempted to connect to, requires a port that"
                                            " is already in use.")
@@ -703,7 +703,8 @@ class TopLevel(QWidget):
                 self.second_port    = port
 
                 self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
-                return (self.myo_2_tab.currentIndex, self.myo_2_charts, self.second_myo_data)
+
+                return (self.top_tab.currentIndex, self.first_myo, self.myo_2_tab.currentIndex, self.myo_2_charts, self.second_myo_data)
 
 
 if __name__ == '__main__':

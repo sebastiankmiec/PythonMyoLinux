@@ -2,8 +2,8 @@
 # PyQt5 imports
 #
 from PyQt5.QtWidgets import (QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
-                                QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage)
-from PyQt5.QtGui import QPixmap, QFontMetrics
+                                QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar)
+from PyQt5.QtGui import QPixmap, QFontMetrics, QPalette
 from PyQt5.QtCore import Qt, QSize, QThreadPool, QObject, pyqtSignal, QUrl, QThread
 from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtMultimediaWidgets import QVideoWidget
@@ -42,21 +42,24 @@ class MyoFoundWidget(QWidget):
         self.chart_list         = None
         self.tab_open           = None
         self.port               = port
-        self.connected          = False
-        self.performing_action  = False
-
-        # Configurable parameters
-        self.num_trim_samples   = 400   # On unexpected disconnect, or user-initiated disconnect, trim this many samples
-                                        #       from the list of all collected data thus far.
-
         self.connect_notify     = connect_notify
         self.disconnect_notify  = disconnect_notify
+
+        # Configurable parameters
+        self.num_trim_samples = 400     # On unexpected disconnect, or user-initiated disconnect, trim this many samples
+                                        #       from the list of all collected data thus far.
+
+        # States
+        self.connected          = False
+        self.worker             = None
+
         self.initUI()
 
     def initUI(self):
 
         topLayout       = QVBoxLayout()
-        widgetLayout    = QHBoxLayout()
+        infoLayout      = QHBoxLayout()
+        infoLayout.setSpacing(5)
 
         # Myo armband icon
         lbl     = QLabel(self)
@@ -67,7 +70,7 @@ class MyoFoundWidget(QWidget):
         #
         # Format the Myo hardware (MAC) into a readable form
         #
-        widgetLayout.addWidget(lbl)
+        infoLayout.addWidget(lbl)
         formatted_address   = ""
         length              = len(self.myo_device["sender_address"].hex())
 
@@ -76,10 +79,30 @@ class MyoFoundWidget(QWidget):
             if ((i-1) % 2 == 0) and (i != length-1):
                 formatted_address += "-"
 
-        # Myo armband address, and signal strength
-        widgetLayout.addWidget(QLabel("Myo Device - " + "\"" + formatted_address + "\"" + " (" +
-                                    str(self.myo_device["rssi"]) + " dBm)"))
-        widgetLayout.setAlignment(Qt.AlignRight)
+        vline = QFrame()
+        vline.setFrameShape(QFrame.VLine)
+        vline.setFrameShadow(QFrame.Sunken)
+        vline2 = QFrame()
+        vline2.setFrameShape(QFrame.VLine)
+        vline2.setFrameShadow(QFrame.Sunken)
+
+        # Myo armband address, signal strength
+        addr_label = QLabel(formatted_address)
+        infoLayout.addWidget(addr_label)
+        infoLayout.addWidget(vline)
+        rssi_label = QLabel(str(self.myo_device["rssi"]) + " dBm")
+        infoLayout.addWidget(rssi_label)
+        infoLayout.addWidget(vline2)
+        infoLayout.setStretchFactor(rssi_label, 3)
+        infoLayout.setStretchFactor(addr_label, 6)
+
+        # Battery Level
+        self.battery_level = QProgressBar()
+        self.battery_level.setMinimum(0)
+        self.battery_level.setMaximum(100)
+        self.battery_level.setValue(100)
+        infoLayout.addWidget(self.battery_level)
+        infoLayout.setStretchFactor(self.battery_level, 2)
 
         #
         # Connect / Disconnect options
@@ -93,7 +116,7 @@ class MyoFoundWidget(QWidget):
         enableLayout.setAlignment(Qt.AlignRight)
 
         # For beauty
-        topLayout.addLayout(widgetLayout)
+        topLayout.addLayout(infoLayout)
         line = QFrame()
         line.setFrameShape(QFrame.HLine)
         line.setFrameShadow(QFrame.Sunken)
@@ -127,18 +150,11 @@ class MyoFoundWidget(QWidget):
             self.enable_box.setEnabled(True)
             return
 
-        self.tab_open   = connection_contents[0]
-        self.chart_list = connection_contents[1]
-        self.data_list  = connection_contents[2]
-
-        #
-        # Prepare EMG visualization
-        #
-        # Data to be collected
-        self.samples_count      = 0
-        self.measurements_list  = [[] for x in range(8)]
-        self.data_indices       = []
-        self.plotted_data       = [None for x in range(8)]
+        self.top_tab_open   = connection_contents[0]
+        self.prev_tab       = connection_contents[1]
+        self.tab_open       = connection_contents[2]
+        self.chart_list     = connection_contents[3]
+        self.data_list      = connection_contents[4]
 
         # Old backend:
         #
@@ -160,16 +176,38 @@ class MyoFoundWidget(QWidget):
         #
         # Begin the process of connecting and collecting data
         #
-        self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
-                                        self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
-                                        self.on_worker_stopped, self.connect_failed, self.on_discon_occurred)
+        if self.worker is None:
+
+            # Data to be collected
+            self.measurements_list  = [[] for x in range(8)]
+            self.data_indices       = []
+            self.plotted_data       = [None for x in range(8)]
+
+            # Create background worker
+            self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
+                                            self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
+                                            self.on_worker_stopped, self.connect_failed, self.on_discon_occurred,
+                                            self.battery_level, self.create_event)
+
+            self.worker.setAutoDelete(False) # We reuse this worker
+
         QThreadPool.globalInstance().start(self.worker)
+
+    def create_event(self):
+        if self.prev_tab is None:
+            idx = 0
+        else:
+            idx = 1
+        return self.top_tab_open() == idx
 
     def on_worker_started(self):
         # Update states
         self.enable_text.setText("Disable: ")
         self.connected = True
 
+        #
+        # Prepare EMG visualization
+        #
         for i, series in enumerate(self.measurements_list):
             # self.chart_list[i].chart().addAxis(self.xaxis_list[i], Qt.AlignBottom)
             # self.chart_list[i].chart().addAxis(self.yaxis_list[i], Qt.AlignLeft)

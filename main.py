@@ -1,7 +1,7 @@
 from pymyolinux.core.myo import MyoDongle
 
 def joint_event_handler(emg_list, orient_w, orient_x, orient_y, orient_z,
-                                accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3):
+                                accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3, sample_num):
 
     # Accelerometer values are multipled by the following constant (and are in units of g)
     MYOHW_ACCELEROMETER_SCALE = 2048.0
@@ -35,8 +35,8 @@ if __name__ == "__main__":
 
     #device_1.add_imu_handler()
     #device_1.add_emg_handler()
-    device_1.enable_imu_readings()
-    device_1.enable_emg_readings()
-    device_1.add_joint_emg_imu_handler(joint_event_handler)
-
-    device_1.scan_for_data_packets()
+    # device_1.enable_imu_readings()
+    # device_1.enable_emg_readings()
+    # device_1.add_joint_emg_imu_handler(joint_event_handler)
+    #
+    # device_1.scan_for_data_packets_conditional()

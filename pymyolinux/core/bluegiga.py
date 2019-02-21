@@ -65,6 +65,7 @@ class BlueGigaProtocol():
         self.emg_handle_1       = None
         self.emg_handle_2       = None
         self.emg_handle_3       = None
+        self.battery_handle     = None
 
         # Filled by event handlers
         self.myo_devices        = []
@@ -72,6 +73,7 @@ class BlueGigaProtocol():
         self.attributes_found   = []
         self.connection         = None
         self.current_imu_read   = None
+        self.battery_level      = None
 
         # Event handlers
         self.ble_evt_gap_scan_response                  += add_myo_device
@@ -567,3 +569,18 @@ class BlueGigaProtocol():
         message_id      = ble_cmd_gap_end_procedure
 
         return struct.pack('<4B', command_message, payload_length, packet_class, message_id)
+
+    def ble_cmd_attclient_read_by_handle(self, connection, chrhandle):
+        """
+            This command reads a remote attribute's value with the given handle. Read by handle can be used to read
+                attributes up to 22 bytes long. For longer attributes Read Long command must be used.
+
+        :param connection: Connection handle
+        :param chrhandle: Attribute handle
+        :return: Bytes object
+        """
+        payload_length  = 3
+        packet_class    = BGAPI_Classes.GATT.value
+        message_id      = ble_cmd_attclient_read_by_handle
+
+        return struct.pack('<4BBH', command_message, payload_length, packet_class, message_id, connection, chrhandle)

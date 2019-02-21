@@ -35,19 +35,28 @@ def on_receive_attribute_value(sender_obj, connection, atthandle, type, value):
                 = struct.unpack('<16b', value)
 
         # Trigger two EMG events
+        sample_num = 1
         sender_obj.emg_event(emg_list = [sample_0_1, sample_0_2, sample_0_3, sample_0_4, sample_0_5,
-                                                        sample_0_6, sample_0_7, sample_0_8])
+                                                        sample_0_6, sample_0_7, sample_0_8], sample_num = sample_num)
+        sample_num = 2
         sender_obj.emg_event(emg_list = [sample_1_1, sample_1_2, sample_1_3, sample_1_4, sample_1_5,
-                                                        sample_1_6, sample_1_7, sample_1_8])
+                                                        sample_1_6, sample_1_7, sample_1_8], sample_num = sample_num)
 
         # Trigger two joint IMU/EMG events:
+        sample_num = 1
         sender_obj.joint_emg_imu_event(emg_list = [sample_0_1, sample_0_2, sample_0_3, sample_0_4, sample_0_5,
                                                         sample_0_6, sample_0_7, sample_0_8],
-                                                    **sender_obj.current_imu_read)
+                                                    **sender_obj.current_imu_read, sample_num = sample_num)
+        sample_num = 2
         sender_obj.joint_emg_imu_event(emg_list = [sample_1_1, sample_1_2, sample_1_3, sample_1_4, sample_1_5,
                                                         sample_1_6, sample_1_7, sample_1_8],
-                                                    **sender_obj.current_imu_read)
+                                                    **sender_obj.current_imu_read, sample_num = sample_num)
 
+    #
+    # Battery Level Attribute
+    #
+    elif (atthandle == sender_obj.battery_handle):
+        sender_obj.battery_level = ord(value)
 
 #######
 ###     (BLE Response) Handlers used by BlueGigaProtocol
@@ -84,8 +93,12 @@ def add_connection(sender_obj, connection, flags, address, address_type, conn_in
                                 'timeout': timeout, 'latency': latency, 'bonding': bonding }
 
 def device_disconnected(sender_obj, connection, reason):
-    if reason == disconnect_due_local_user:
-        print("Connection \"{}\" disconnected due to local user (disconnect issued).".format(connection))
+    if reason == connection_timeout:
+        print("Connection \"{}\" disconnected due to connection timeout (link supervision timeout has expired)."
+              " Error Code 0x0208".format(connection))
+    elif reason == connection_term_by_local_host:
+        print("Connection \"{}\" disconnected due to termination by local host (local device terminated the "
+              "connection). Error Code 0x0216".format(connection))
     else:
         print("Connection \"{}\" disconnected due to uknown reason (resason = {}).".format(connection, reason))
     sender_obj.disconnecting    = False

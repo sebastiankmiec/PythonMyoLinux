@@ -15,7 +15,7 @@ class MyoDongle():
     default_latency = 0     # This parameter configures the slave latency. Slave latency defines how many connection
                             # intervals a slave device can skip.
 
-    default_timeout = 64    # How long the devices can be out of range before the connection is closed.
+    default_timeout = 64    # How long the devices can be out of range before the connection is closed (units of 10ms).
                             # Range: 10 - 3200
 
     # Range: 6 - 3200 (in units of 1.25ms).
@@ -39,7 +39,7 @@ class MyoDongle():
         :param com_port: Refers to a path to a character device file, for a usb to BLE controller serial interface.
                             e.g. /dev/ttyACM0
         """
-        self.ble        = BlueGigaProtocol(com_port)
+        self.ble = BlueGigaProtocol(com_port)
 
         # Filled via "discover_primary_services()"
         self.handles        = {}
@@ -136,7 +136,7 @@ class MyoDongle():
 
         # Stop scanning
         self.transmit_wait(self.ble.ble_cmd_gap_end_procedure(), BlueGigaProtocol.ble_rsp_gap_end_procedure)
-        self.descriptors    = {}
+        self.handles    = {}
 
     def discover_myo_devices(self, timeout=2):
         # Scan for advertising packets
@@ -262,7 +262,7 @@ class MyoDongle():
         """
             On receiving an EMG data packet.
         :param handler: A function to be called with the following signature:
-                            ---> myfunc_data_handler_123(emg_list)
+                            ---> myfunc_data_handler_123(emg_list, sample_num)
         """
         if not self.emg_enabled:
             raise RuntimeError("EMG readings are not enabled.")
@@ -316,13 +316,32 @@ class MyoDongle():
               On receiving an EMG data packet, use the latest IMU packet.
               :param handler: A function to be called with the following signature:
                                   ---> myfunc_data_handler_123(emg_list, orient_w, orient_x, orient_y, orient_z, accel_1,
-                                                                        accel_2, accel_3, gyro_1, gyro_2, gyro_3)
+                                                                        accel_2, accel_3, gyro_1, gyro_2, gyro_3,
+                                                                        sample_num)
         """
         if not self.imu_enabled:
             raise RuntimeError("IMU readings are not enabled.")
         if not self.emg_enabled:
             raise RuntimeError("EMG readings are not enabled.")
         self.ble.joint_emg_imu_event += handler
+
+    def read_battery_level(self):
+        if self.ble.connection is None:
+            raise RuntimeError("BLE connection is None.")
+
+        #
+        # Ensure handles have been discovered
+        #
+        self.check_handles()
+
+        #
+        # Issue a command to read Myo device battery level
+        #
+        self.transmit_wait(self.ble.ble_cmd_attclient_read_by_handle(self.ble.connection["connection"],
+                                                                      self.ble.battery_handle),
+                                BlueGigaProtocol.ble_evt_attclient_attribute_value)
+
+        return self.ble.battery_level
 
     def set_sleep_mode(self, device_can_sleep):
         if self.ble.connection is None:
@@ -365,7 +384,7 @@ class MyoDongle():
     def check_handles(self):
         # Need to be able to activate notifications via writing to descriptor handles
         #
-        if len(self.descriptors.keys()) == 0:
+        if len(self.handles.keys()) == 0:
             self.discover_primary_services()
             if len(self.ble.attributes_found) == 0:
                 raise RuntimeError("No attributes found, ensure discover_primary_services() was called.")
@@ -378,6 +397,7 @@ class MyoDongle():
         emg_uuid_1      = get_full_uuid(HW_Services.EmgData1Characteristic.value)
         emg_uuid_2      = get_full_uuid(HW_Services.EmgData2Characteristic.value)
         emg_uuid_3      = get_full_uuid(HW_Services.EmgData3Characteristic.value)
+        battery_uuid    = HW_Services.BatteryLevelCharacteristic.value
 
         for attribute in self.ble.attributes_found:
             if attribute["uuid"].endswith(imu_uuid):
@@ -402,6 +422,9 @@ class MyoDongle():
                 self.ble.emg_handle_3               = attribute["chrhandle"]
                 self.handles["emg_descriptor_3"]    = attribute["chrhandle"] + 1
 
+            elif attribute["uuid"].endswith(battery_uuid):
+                self.ble.battery_handle = attribute["chrhandle"]
+
         if "imu_descriptor" not in self.handles:
             raise RuntimeError("Unable to find IMU attribute, in device's GATT database.")
         if "command_characteristic" not in self.handles:
@@ -414,4 +437,3 @@ class MyoDongle():
             raise RuntimeError("Unable to find EMG attribute 2, in device's GATT database.")
         if "emg_descriptor_3" not in self.handles:
             raise RuntimeError("Unable to find EMG attribute 3, in device's GATT database.")
-

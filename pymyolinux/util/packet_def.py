@@ -13,16 +13,19 @@ def get_full_uuid(short_uuid):
     return new_uuid
 
 class HW_Services(Enum):
-    ControlService          = b"\x00\x01" # Myo info service (advertising packets)
+    ControlService              = b"\x00\x01" # Myo info service (advertising packets)
 
-    IMUDataCharacteristic   = b"\x04\x02"   # Notify only characteristic for IMU data
+    IMUDataCharacteristic       = b"\x04\x02"   # Notify only characteristic for IMU data
 
-    CommandCharacteristic   = b"\x04\x01"   # A write only attribute to issue commands (such as setting Myo mode).
+    CommandCharacteristic       = b"\x04\x01"   # A write only attribute to issue commands (such as setting Myo mode).
 
-    EmgData0Characteristic  = b"\x01\x05"   # Raw EMG data. Notify-only characteristic.
-    EmgData1Characteristic  = b"\x02\x05"   # Raw EMG data. Notify-only characteristic.
-    EmgData2Characteristic  = b"\x03\x05"   # Raw EMG data. Notify-only characteristic.
-    EmgData3Characteristic  = b"\x04\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData0Characteristic      = b"\x01\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData1Characteristic      = b"\x02\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData2Characteristic      = b"\x03\x05"   # Raw EMG data. Notify-only characteristic.
+    EmgData3Characteristic      = b"\x04\x05"   # Raw EMG data. Notify-only characteristic.
+
+    BatteryLevelCharacteristic  = b"\x19\x2a"   # Current battery level information. Read/notify characteristic
+                                                # Note: The order of bytes
 
 ########################################################################################################################
 ########################################################################################################################
@@ -83,6 +86,7 @@ ble_evt_connection_disconnected = 0x04 # Event
 ble_cmd_connection_disconnect           = 0x00
 ble_cmd_attclient_read_by_group_type    = 0x01
 ble_cmd_attclient_find_information      = 0x03
+ble_cmd_attclient_read_by_handle        = 0x04
 ble_cmd_attclient_attribute_write       = 0x05
 
 # GAP
@@ -139,6 +143,13 @@ GAP_end_procedure_success       = 0
 GATT_end_procedure_success      = 0
 find_info_success               = 0
 write_success                   = 0
+
+
+#
+# Bluetooth Error Codes
+#
+connection_timeout              = 0x0208
+connection_term_by_local_host   = 0x0216
 
 ########################################################################################################################
 ########################################################################################################################

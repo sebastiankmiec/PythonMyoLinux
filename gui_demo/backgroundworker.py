@@ -40,7 +40,8 @@ class MyoDataWorker(QRunnable):
             4) Optionally, disconnects on a second press, halting the receipt of data
     """
     def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list,
-                    on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred):
+                    on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred, battery_level,
+                    create_event):
         """
         :param port: Port used to create MyoFoundWidget widget.
         :param myo_device: Address of Myo device to interact with.
@@ -49,27 +50,40 @@ class MyoDataWorker(QRunnable):
         :param data_list: A list of all data collected from this device.
         """
         super().__init__()
-        self.dongle         = MyoDongle(port)
+        self.port           = port
         self.myo_device     = myo_device
         self.series_list    = series_list
         self.indices_list   = indices_list
         self.data_list      = data_list
         self.update         = DataWorkerUpdate()
+        self.battery_level  = battery_level
+        self.create_event   = create_event
+
         self.update.axesUpdate.connect(axes_callback)
         self.update.dataUpdate.connect(data_call_back)
         self.update.workerStarted.connect(on_worker_started)
         self.update.workerStopped.connect(on_worker_stopped)
         self.update.connectFailed.connect(on_connect_failed)
         self.update.disconOccurred.connect(on_discon_occurred)
-        self.scan_period    = 0.2 # seconds
+
+        # Configurable parameters
+        self.scan_period        = 0.2 # seconds
+        self.update_period      = 4
+        self.emg_sample_rate    = 200 # 200 hz
 
         # States
         self.running        = False
         self.samples_count  = 0
 
-    def run(self):
+        # Timestamp states
+        self.reset_period   = 200
+        self.cur_sample     = 0
+        self.base_time      = None
 
-        self.running = True
+    def run(self):
+        # Setup
+        self.dongle     = MyoDongle(self.port)
+        self.running    = True
         self.update.workerStarted.emit()
 
         # Connect
@@ -79,11 +93,16 @@ class MyoDataWorker(QRunnable):
             self.update.connectFailed.emit()
             return
 
+        # Attempt to update battery level
+        level = self.dongle.read_battery_level()
+        if not (level is None):
+            QMetaObject.invokeMethod(self.battery_level, "setValue",
+                                     Qt.QueuedConnection, Q_ARG(int, level))
+
         # Enable IMU/EMG readings and callback functions
         self.dongle.set_sleep_mode(False)
         self.dongle.enable_imu_readings()
         self.dongle.enable_emg_readings()
-
         self.dongle.add_joint_emg_imu_handler(self.create_emg_event)
 
         disconnect_occurred = False
@@ -98,7 +117,7 @@ class MyoDataWorker(QRunnable):
             self.update.workerStopped.emit()
 
     def create_emg_event(self, emg_list, orient_w, orient_x, orient_y, orient_z,
-                                accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3):
+                                accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3, sample_num):
         """
             On receipt of a data packet from a Myo device, triggered by "scan_for_data_packets", this function is
             called.
@@ -112,6 +131,16 @@ class MyoDataWorker(QRunnable):
 
         if self.running:
 
+            if self.cur_sample % self.reset_period == 0:
+                self.base_time = time.time()
+                self.cur_sample = 0
+
+            time_received    = self.base_time + self.cur_sample * (1/self.emg_sample_rate)
+            self.cur_sample += 1
+
+            # Is this tab corresponding to this worker open
+            create_events = self.create_event()
+
             # Request an axes update for the charts
             if (self.samples_count != 0) and (self.samples_count % NUM_GUI_SAMPLES == 0):
                 self.start_range = self.samples_count
@@ -119,14 +148,19 @@ class MyoDataWorker(QRunnable):
                     self.series_list[i].clear()
                     # self.series_list[i].removePoints(0, NUM_GUI_SAMPLES-1)
                 self.indices_list.clear()
-                self.update.axesUpdate.emit()
+
+                if create_events:
+                    self.update.axesUpdate.emit()
 
             # Update chart data
             for i in range(len(self.series_list)):
                 #self.series_list[i].append(self.samples_count, emg_list[i])
                 self.series_list[i].append(emg_list[i])
             self.indices_list.append(self.samples_count)
-            self.update.dataUpdate.emit()
+
+            if create_events:
+                if self.samples_count % self.update_period == 0:
+                    self.update.dataUpdate.emit()
 
             # Accelerometer values are multipled by the following constant (and are in units of g)
             MYOHW_ACCELEROMETER_SCALE = 2048.0
@@ -138,7 +172,7 @@ class MyoDataWorker(QRunnable):
             MYOHW_ORIENTATION_SCALE = 16384.0
 
             # Update list of all data collected (with correct rescaling)
-            self.data_list.append((time.time(), self.samples_count, emg_list,
+            self.data_list.append((time_received, self.samples_count, emg_list,
                                         [orient_w / MYOHW_ORIENTATION_SCALE, orient_x / MYOHW_ORIENTATION_SCALE,
                                          orient_y / MYOHW_ORIENTATION_SCALE, orient_z / MYOHW_ORIENTATION_SCALE],
                                         [accel_1 / MYOHW_ACCELEROMETER_SCALE, accel_2 / MYOHW_ACCELEROMETER_SCALE,
@@ -152,8 +186,6 @@ class MyoDataWorker(QRunnable):
             #                       [accel_1, accel_2, accel_3],
             #                       [gyro_1, gyro_2, gyro_3]))
             self.samples_count += 1
-
-
 
 
 class MyoSearchWorker(QRunnable):
