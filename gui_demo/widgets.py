@@ -9,8 +9,9 @@ from PyQt5.QtMultimedia import QMediaPlayer
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
 from os.path import join, exists
-# from PyQt5.QtChart import QLineSeries, QValueAxis
 
+# Old backend:
+# from PyQt5.QtChart import QLineSeries, QValueAxis
 
 #
 # Miscellaneous imports
@@ -29,12 +30,15 @@ class MyoFoundWidget(QWidget):
     """
         A Widget for a Myo found list entry, that provides the ability to connect/disconnect.
     """
-    def __init__(self, port, myo_device, connect_notify, disconnect_notify):
+    def __init__(self, port, myo_device, connect_notify, disconnect_notify, get_current_label, battery_notify):
         """
+
         :param port: The port used to find this device.
         :param myo_device: The hardware (MAC) address of this device.
         :param connect_notify: A function called prior to connection attempts.
         :param disconnect_notify: A function called prior to disconnect attempts.
+        :param get_current_label: A function that returns the current ground truth label.
+        :param battery_notify: A function called on battery update evenets.
         """
         super().__init__()
 
@@ -44,15 +48,16 @@ class MyoFoundWidget(QWidget):
         self.port               = port
         self.connect_notify     = connect_notify
         self.disconnect_notify  = disconnect_notify
-
-        # Configurable parameters
-        self.num_trim_samples = 400     # On unexpected disconnect, or user-initiated disconnect, trim this many samples
-                                        #       from the list of all collected data thus far.
+        self.get_current_label  = get_current_label
+        self.battery_notify     = battery_notify
 
         # States
         self.connected          = False
         self.worker             = None
 
+        # Configurable parameters
+        self.num_trim_samples = 400     # On unexpected disconnect, or user-initiated disconnect, trim this many samples
+                                        #       from the list of all collected data thus far.
         self.initUI()
 
     def initUI(self):
@@ -86,7 +91,9 @@ class MyoFoundWidget(QWidget):
         vline2.setFrameShape(QFrame.VLine)
         vline2.setFrameShadow(QFrame.Sunken)
 
+        #
         # Myo armband address, signal strength
+        #
         addr_label = QLabel(formatted_address)
         infoLayout.addWidget(addr_label)
         infoLayout.addWidget(vline)
@@ -96,7 +103,9 @@ class MyoFoundWidget(QWidget):
         infoLayout.setStretchFactor(rssi_label, 3)
         infoLayout.setStretchFactor(addr_label, 6)
 
+        #
         # Battery Level
+        #
         self.battery_level = QProgressBar()
         self.battery_level.setMinimum(0)
         self.battery_level.setMaximum(100)
@@ -131,8 +140,6 @@ class MyoFoundWidget(QWidget):
                 2) Establishes data to be received
                 3) Collects data from a Myo armband device
                 4) Optionally, disconnects on a second press, halting the receipt of data
-
-        :return: None
         """
         self.enable_box.setEnabled(False)
 
@@ -156,6 +163,45 @@ class MyoFoundWidget(QWidget):
         self.chart_list     = connection_contents[3]
         self.data_list      = connection_contents[4]
 
+        #
+        # Begin the process of connecting and collecting data
+        #
+        if self.worker is None:
+
+            # Data to be collected
+            self.measurements_list  = [[] for x in range(8)]
+            self.data_indices       = []
+            self.plotted_data       = [None for x in range(8)]
+
+            # Create background worker
+            self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
+                                            self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
+                                            self.on_worker_stopped, self.connect_failed, self.on_discon_occurred,
+                                            self.battery_notify, self.create_event, self.get_current_label)
+
+            self.worker.setAutoDelete(False) # We reuse this worker
+
+        QThreadPool.globalInstance().start(self.worker)
+
+    def create_event(self):
+        """
+                Determines if data updates should be sent to this MyoFoundWidget object, based on which top tab is open.
+
+            :return: [bool] Should data updates be sent to this widget?
+        """
+        if self.prev_tab is None:
+            idx = 0
+        else:
+            idx = 1
+        return self.top_tab_open() == idx
+
+    def on_worker_started(self):
+        """
+            Once the background data worker starts, this function is called.
+                > This function sets up the EMG plots for updates, and allows the user to disconnect (if they wish).
+        :return:
+        """
+
         # Old backend:
         #
         # self.measurements_list = [QLineSeries() for x in range(8)]
@@ -174,38 +220,6 @@ class MyoFoundWidget(QWidget):
         #    series.attachAxis(self.yaxis_list[i])
 
         #
-        # Begin the process of connecting and collecting data
-        #
-        if self.worker is None:
-
-            # Data to be collected
-            self.measurements_list  = [[] for x in range(8)]
-            self.data_indices       = []
-            self.plotted_data       = [None for x in range(8)]
-
-            # Create background worker
-            self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
-                                            self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
-                                            self.on_worker_stopped, self.connect_failed, self.on_discon_occurred,
-                                            self.battery_level, self.create_event)
-
-            self.worker.setAutoDelete(False) # We reuse this worker
-
-        QThreadPool.globalInstance().start(self.worker)
-
-    def create_event(self):
-        if self.prev_tab is None:
-            idx = 0
-        else:
-            idx = 1
-        return self.top_tab_open() == idx
-
-    def on_worker_started(self):
-        # Update states
-        self.enable_text.setText("Disable: ")
-        self.connected = True
-
-        #
         # Prepare EMG visualization
         #
         for i, series in enumerate(self.measurements_list):
@@ -219,9 +233,16 @@ class MyoFoundWidget(QWidget):
             self.plotted_data[i] = self.chart_list[i].plot(self.data_indices, self.measurements_list[i],
                                                            pen=pg.functions.mkPen("08E", width=2),
                                                            symbol='o', symbolSize=SYMBOL_SIZE)
+
+        # Update states
+        self.enable_text.setText("Disable: ")
+        self.connected = True
         self.enable_box.setEnabled(True)
 
     def on_discon_occurred(self):
+        """
+            If a Myo device disconnects unexpectedly, this function is called.
+        """
         self.connected = False
         self.enable_text.setText("Enable: ")
         self.enable_box.setCheckState(Qt.Unchecked)
@@ -242,8 +263,7 @@ class MyoFoundWidget(QWidget):
 
     def connect_failed(self):
         """
-            A helper function to disconnect from a Myo device.
-        :return: None
+            A function called upon connection failure, from the background data worker.
         """
         self.connected = False
         self.enable_text.setText("Enable: ")
@@ -259,7 +279,6 @@ class MyoFoundWidget(QWidget):
     def on_worker_stopped(self):
         """
             A helper function to disconnect from a Myo device.
-        :return: None
         """
         self.connected = False
         self.enable_text.setText("Enable: ")
@@ -285,8 +304,6 @@ class MyoFoundWidget(QWidget):
         """
             On each new data sample collected, this function is triggered by a ChartUpdate event, specifically,
                 a dataUpdate signal.
-
-            :return: None
         """
 
         if self.connected:
@@ -303,8 +320,6 @@ class MyoFoundWidget(QWidget):
                 the most recent data.
 
                 > This function is triggred by a ChartUpdate event, specifically, an axesUpdate signal.
-
-        :return: None
         """
 
         if self.connected:
@@ -335,7 +350,8 @@ class MyoFoundWidget(QWidget):
 
 class GroundTruthHelper(QMainWindow):
     """
-
+        GroundTruthHelper is opened upon pressing "GT Helper".
+            > This window plays videos and provides ground truth, in order to provide a simple data collection interface.
     """
 
     #
@@ -348,9 +364,8 @@ class GroundTruthHelper(QMainWindow):
 
     def __init__(self, parent=None, close_function=None):
         """
-
-        :param parent:
-        :param close_function:
+        :param parent: Parent widget
+        :param close_function: A function called upon user exit of the GroundTruthHelper window.
         """
         super(GroundTruthHelper, self).__init__(parent)
 
@@ -372,7 +387,6 @@ class GroundTruthHelper(QMainWindow):
                                         ("arrows/exercise_b/b{}.mp4", 17),
                                         ("arrows/exercise_c/c{}.mp4", 23)
                                     ]
-        #self.sleep_period           = 2 # seconds
 
         # States
         self.playing            = False
@@ -387,14 +401,18 @@ class GroundTruthHelper(QMainWindow):
     def initUI(self):
         self.setGeometry(0, 0, 1024, 768)
 
+        #
         # Contains all widgets within this main window
+        #
         top_level_widget = QWidget(self)
         self.setCentralWidget(top_level_widget)
         top_layout = QGridLayout()
         top_layout.setContentsMargins(10, 10, 10, 10)
         top_layout.setSpacing(12)
 
+        #
         # Top Text
+        #
         self.status_label   = QLabel("Waiting to Start...")
         self.status_label.setStyleSheet(" font-weight: bold; font-size: 18pt; "
                                         "   color: red;")
@@ -403,12 +421,16 @@ class GroundTruthHelper(QMainWindow):
         self.progress_label.setStyleSheet(" font-size: 16pt; color: black;")
         self.progress_label.setAlignment(Qt.AlignCenter)
 
+        #
         # Video box
+        #
         self.setWindowTitle("Ground Truth Helper")
         self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
         videoWidget = QVideoWidget()
 
+        #
         # Description Box
+        #
         description_box = QGroupBox()
         description_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         description_box.setContentsMargins(0, 0, 0, 0)
@@ -429,12 +451,12 @@ class GroundTruthHelper(QMainWindow):
         desc_layout.setStretchFactor(self.desc_explain, 9)
         description_box.setLayout(desc_layout)
 
+        #
         # Start, Pause, Stop Buttons
+        #
         start_stop_box      = QGroupBox()
         start_stop_box.setContentsMargins(0, 0, 0, 0)
         start_stop_box.setObjectName("StartBox")
-        #start_stop_box.setStyleSheet("QGroupBox#StartBox { border: 2px solid gray; border-radius: 10px;"
-        #                             "                       border-color: black;}")
         start_box_layout    = QGridLayout()
 
         self.current_movement = QLabel("")
@@ -478,7 +500,9 @@ class GroundTruthHelper(QMainWindow):
         start_box_layout.setRowStretch(1, 1)
         start_box_layout.setRowStretch(2, 1)
 
+        #
         # Training Session Parameters
+        #
         parameters_box = QGroupBox()
         parameters_box.setTitle("Collection Parameters")
         parameters_box.setObjectName("CollecParamBox")
@@ -523,7 +547,9 @@ class GroundTruthHelper(QMainWindow):
         top_param_layout.setColumnStretch(3, 3)
         parameters_box.setLayout(top_param_layout)
 
+        #
         # Positions and sizes of all widgets in grid layout
+        #
         top_layout.addWidget(self.status_label, 0, 0)
         top_layout.addWidget(self.progress_label, 0, 1)
         top_layout.addWidget(videoWidget, 1, 0)
@@ -536,17 +562,33 @@ class GroundTruthHelper(QMainWindow):
         top_layout.setColumnStretch(0, 66)
         top_layout.setColumnStretch(1, 33)
 
+        #
         # Set widget to contain window contents
+        #
         top_level_widget.setLayout(top_layout)
         self.video_player.setVideoOutput(videoWidget)
         self.video_player.setMuted(True)
 
     def enable_video_buttons(self, state_play, state_pause, state_stop):
+        """
+            A helper function to set the current states of the play/pause/stop buttons.
+
+        :param state_play: [bool] Enable/disable play button.
+        :param state_pause: [bool] Enable/disable pause button.
+        :param state_stop: [bool] Enable/disable stop button.
+        :return:
+        """
         self.play_button.setEnabled(state_play)
         self.pause_button.setEnabled(state_pause)
         self.stop_button.setEnabled(state_stop)
 
     def start_videos(self):
+        """
+            A function called when the "Start" button is pressed.
+                > Either
+                    i. Starts the background worker thread to play video, update text fields and more
+                    ii. Unpauses the background worker, in order to continue doing the aforesaid.
+        """
 
         # Disable play/pause/stop buttons until it is safe
         self.enable_video_buttons(False, False, False)
@@ -561,7 +603,6 @@ class GroundTruthHelper(QMainWindow):
 
         if self.worker is not None:
             self.worker.force_unpause()
-            #time.sleep(self.sleep_period)
             return
 
         #
@@ -639,50 +680,73 @@ class GroundTruthHelper(QMainWindow):
                                             self.on_worker_started, self.on_worker_unpaused, self.on_worker_paused,
                                             self.on_worker_stopped)
         QThreadPool.globalInstance().start(self.worker)
-        #time.sleep(self.sleep_period)
 
     def on_worker_started(self):
+        """
+            This function is called when the background worker has started.
+        """
         self.playing = True
         self.enable_video_buttons(False, True, True)
 
     def on_worker_unpaused(self):
+        """
+             This function is called when the background worker has unpaused.
+         """
         self.playing = True
         self.enable_video_buttons(False, True, True)
         self.unpausing = False
 
     def on_worker_paused(self):
+        """
+            This function is called when the background worker has paused.
+        """
         self.playing = False
         self.pausing = False
         self.enable_video_buttons(True, False, True)
 
     def on_worker_stopped(self):
-        self.worker     = None
+        """
+            This function is called when the background worker has finished execution of run().
+        """
         self.playing    = False
         self.shutdown   = False
+        self.worker     = None
         self.enable_video_buttons(True, False, False)
 
     def pause_videos(self):
+        """
+            This function is called when the user presses "Pause".
+                > The background worker pauses the playback of video, and updating of text fields.
+                > The ground truth labels also become invalid.
+        """
         if (not self.playing) or (self.pausing) or (self.shutdown):
             return
         self.enable_video_buttons(False, False, False)
         self.pausing = True
 
+        # Pause the background worker
         self.worker.force_pause()
-        #time.sleep(self.sleep_period)
 
     def stop_videos(self):
-        if (not self.playing) or (self.shutdown):
+        """
+            This function is called when the user presses "Stop".
+                > The background worker finishes executing the run() function as a result of being "stopped".
+        """
+        if ((not self.playing) and (self.worker is None)) or (self.shutdown):
             return
         self.enable_video_buttons(False, False, False)
         self.shutdown = True
 
+        # Force the background worker to leave run()
         self.worker.force_stop()
-        #time.sleep(self.sleep_period)
 
     def check_video_paths(self):
         """
+            Determines if an exercise has all videos necessary for playback, upon pressing "Start".
 
-        :return:
+        :return: [bool, bool, bool]
+
+                > Where each bool determines if exercise A/B/C has all videos available.
         """
 
         exercises_found         = [True, True, True]
@@ -715,15 +779,17 @@ class GroundTruthHelper(QMainWindow):
 
         return exercises_found
 
-
     #
-    # Used for data logging
+    # Used for data logging, by TopLevel
     #
     def get_current_label(self):
-        if self.worker is None:
-            return 0
+        """
+        :return: [int] Ground truth label for current movement
+        """
+        if (self.worker is None) or (not self.playing):
+            return -1
         else:
             if self.worker.current_label is None:
-                return 0
+                return -1
             else:
                 return self.worker.current_label

@@ -34,8 +34,6 @@ class MyoDongle():
 
     def __init__(self, com_port):
         """
-            DESC
-
         :param com_port: Refers to a path to a character device file, for a usb to BLE controller serial interface.
                             e.g. /dev/ttyACM0
         """
@@ -48,6 +46,10 @@ class MyoDongle():
         self.sleep_disabled = False
 
     def clear_state(self, timeout=2):
+        """
+            Disconnects any connected devices, stops any advertising, stops any scanning, and resets Myo armband states.
+        :param timeout: Time to wait for responses
+        """
 
         if not (self.ble.connection is None):
 
@@ -139,6 +141,12 @@ class MyoDongle():
         self.handles    = {}
 
     def discover_myo_devices(self, timeout=2):
+        """
+            Finds all available Myo armband devices, in terms of MAC address, and rssi.
+
+        :param timeout: Time to wait for responses
+        :return: [list] Myo devices found
+        """
         # Scan for advertising packets
         self.transmit_wait(self.ble.ble_cmd_gap_discover(GAP_Discover_Mode.gap_discover_observation.value),
                                 BlueGigaProtocol.ble_rsp_gap_discover)
@@ -150,6 +158,13 @@ class MyoDongle():
         return self.ble.myo_devices
 
     def connect(self, myo_device_found, timeout=2):
+        """
+            Attempt to connect to Myo device, necessary to call other functions (but discover_myo_devices/clear_state).
+
+        :param myo_device_found: A myo device found via discover_myo_devices().
+        :param timeout: Time to wait for responses
+        :return: [bool] Connection success
+        """
         if self.ble.connection is not None:
             raise RuntimeError("BLE connection is not None.")
 
@@ -167,6 +182,12 @@ class MyoDongle():
         return True
 
     def discover_primary_services(self, timeout=10):
+        """
+            This function finds all available primary services (and their corresponding ranges) available from the
+                Myo device. This is later used to fill self.handles.
+
+        :param timeout: Time to wait for responses
+        """
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
 
@@ -201,6 +222,13 @@ class MyoDongle():
         self.ble.transmit_packet(packet_contents)
 
     def transmit_wait(self, packet_contents, event, timeout=2):
+        """
+            Send a packet and wait for expected response (every transmitted packet has an expected response)
+
+        :param packet_contents: A bytes object containg packet contents
+        :param event: An event to wait for
+        :param timeout: Time to wait for aforesaid event
+        """
         self.ble.transmit_packet(packet_contents)
         resp_received = self.ble.read_packets_conditional(event, timeout)
         if not resp_received:
@@ -218,6 +246,9 @@ class MyoDongle():
         self.ble.imu_event += handler
 
     def enable_imu_readings(self, timeout=2):
+        """
+            Enable incoming IMU data packets from Myo device.
+        """
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
 
@@ -260,6 +291,9 @@ class MyoDongle():
 
     def add_emg_handler(self, handler):
         """
+             :param handler: A function with an appropriate signature to be called on incoming EMG data packets
+        """
+        """
             On receiving an EMG data packet.
         :param handler: A function to be called with the following signature:
                             ---> myfunc_data_handler_123(emg_list, sample_num)
@@ -269,6 +303,9 @@ class MyoDongle():
         self.ble.emg_event += handler
 
     def enable_emg_readings(self):
+        """
+            Enable incoming EMG data packets from Myo device.
+        """
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
 
@@ -313,6 +350,9 @@ class MyoDongle():
 
     def add_joint_emg_imu_handler(self, handler):
         """
+        :param handler: A function with an appropriate signature to be called on incoming EMG & IMU data packets
+        """
+        """
               On receiving an EMG data packet, use the latest IMU packet.
               :param handler: A function to be called with the following signature:
                                   ---> myfunc_data_handler_123(emg_list, orient_w, orient_x, orient_y, orient_z, accel_1,
@@ -326,6 +366,10 @@ class MyoDongle():
         self.ble.joint_emg_imu_event += handler
 
     def read_battery_level(self):
+        """
+            Read the battery level of a Myo device.
+        :return: [int] battery level (None if not available)
+        """
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
 
@@ -344,6 +388,9 @@ class MyoDongle():
         return self.ble.battery_level
 
     def set_sleep_mode(self, device_can_sleep):
+        """
+        :param device_can_sleep: [bool] True: normal sleep mode / False: no sleep mode
+        """
         if self.ble.connection is None:
             raise RuntimeError("BLE connection is None.")
 
@@ -374,16 +421,35 @@ class MyoDongle():
         self.sleep_disabled = not device_can_sleep
 
     def scan_for_data_packets(self, time=10):
+        """
+            Read incoming packets and trigger relevant events, until a disconnect occurs or time is up.
+        :param time: Time to read incoming packets
+        """
         self.ble.read_packets(time)
 
     def scan_for_data_packets_conditional(self, time=10):
+        """
+            Read incoming packets and trigger relevant events, until a disconnect occurs or time is up.
+        :param time: Time to read incoming packets
+        :return: [bool] Did a disconnect occur
+        """
         disconnect_occurred = self.ble.read_packets_conditional(BlueGigaProtocol.ble_evt_connection_disconnected, time)
         return disconnect_occurred
 
+
+    ####################################################################################################################
+    ####################################################################################################################
+    #
     # Helper functions
+    #
+    ####################################################################################################################
+    ####################################################################################################################
     def check_handles(self):
+        """
+            Ensures all key handles have been found.
+        """
+
         # Need to be able to activate notifications via writing to descriptor handles
-        #
         if len(self.handles.keys()) == 0:
             self.discover_primary_services()
             if len(self.ble.attributes_found) == 0:
@@ -391,6 +457,9 @@ class MyoDongle():
             self.fill_handles()
 
     def fill_handles(self):
+        """
+            This function fills self.ble and self.handles with key Myo handles.
+        """
         imu_uuid        = get_full_uuid(HW_Services.IMUDataCharacteristic.value)
         command_uuid    = get_full_uuid(HW_Services.CommandCharacteristic.value)
         emg_uuid_0      = get_full_uuid(HW_Services.EmgData0Characteristic.value)

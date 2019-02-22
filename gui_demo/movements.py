@@ -1,7 +1,22 @@
 #
 # Contains title and explanation of each possible movement (per exercise)
 #
-
+#   Format:
+#
+#       Exercise (A/B/C)
+#
+#           - Gesture 1
+#               > Name
+#               > Description (HTML)
+#
+#           - Gesture 2
+#               > Name
+#               > Description (HTML)
+#               .
+#               .
+#           - Gesture N
+#
+#
 MOVEMENT_DESC = {
                     "A": {
                             1: ("Index Finger Flexion", "<b>Simple</b>:<ul><li>Flex your index finger</ul>"),

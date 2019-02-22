@@ -21,9 +21,12 @@ from movements import MOVEMENT_DESC
 #
 # Custom PyQt5 events
 #
+
+# MyoSearchWorker
 class MyoSearch(QObject):
     searchComplete = pyqtSignal()
 
+# Used by MyoDataWorker
 class DataWorkerUpdate(QObject):
     axesUpdate      = pyqtSignal()
     dataUpdate      = pyqtSignal()
@@ -31,7 +34,9 @@ class DataWorkerUpdate(QObject):
     workerStopped   = pyqtSignal()
     connectFailed   = pyqtSignal()
     disconOccurred  = pyqtSignal()
+    batteryUpdate   = pyqtSignal([int])
 
+# Used by GroundTruthWorker
 class GTWorkerUpdate(QObject):
     workerStarted   = pyqtSignal()
     workerUnpaused  = pyqtSignal()
@@ -44,27 +49,37 @@ class MyoDataWorker(QRunnable):
             1) Connects to a device (if possible)
             2) Establishes data to be received
             3) Collects data from a Myo armband device
-            4) Optionally, disconnects on a second press, halting the receipt of data
+            4) Passes data to MyoFoundWidget for plotting
+            5) Optionally, disconnects on a second press, halting the receipt of data
     """
     def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list,
-                    on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred, battery_level,
-                    create_event):
+                    on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred, battery_notify,
+                    create_event, get_current_label):
         """
         :param port: Port used to create MyoFoundWidget widget.
         :param myo_device: Address of Myo device to interact with.
-        :param series_list: A list of series that hold data, connected to the charts.
+        :param series_list: A list of series that hold data, corresponding to the charts.
+        :param indices_list: A list of sample indices, corresponding to the charts.
         :param axes_callback: Called when chart axes need an update.
+        :param data_call_back: A function called on receipt of EMG data.
         :param data_list: A list of all data collected from this device.
+        :param on_worker_started: A function called when this background worker starts.
+        :param on_worker_stopped: A function called when this background worker exits run().
+        :param on_connect_failed: A function called when this background worker fails to connect to a Myo device.
+        :param on_discon_occurred: A function called when the corresponding Myo device disconnects unexpectedly.
+        :param battery_notify: A function called on receipt of battery level update.
+        :param create_event: A function that determines whether to push data updates, based on open tabs.
+        :param get_current_label: A function that returns the current ground truth label being collected.
         """
         super().__init__()
-        self.port           = port
-        self.myo_device     = myo_device
-        self.series_list    = series_list
-        self.indices_list   = indices_list
-        self.data_list      = data_list
-        self.update         = DataWorkerUpdate()
-        self.battery_level  = battery_level
-        self.create_event   = create_event
+        self.port               = port
+        self.myo_device         = myo_device
+        self.series_list        = series_list
+        self.indices_list       = indices_list
+        self.data_list          = data_list
+        self.update             = DataWorkerUpdate()
+        self.create_event       = create_event
+        self.get_current_label  = get_current_label
 
         # Signals
         self.update.axesUpdate.connect(axes_callback)
@@ -73,6 +88,7 @@ class MyoDataWorker(QRunnable):
         self.update.workerStopped.connect(on_worker_stopped)
         self.update.connectFailed.connect(on_connect_failed)
         self.update.disconOccurred.connect(on_discon_occurred)
+        self.update.batteryUpdate.connect(battery_notify)
 
         # Configurable parameters
         self.scan_period        = 0.2 # seconds
@@ -106,8 +122,7 @@ class MyoDataWorker(QRunnable):
         # Attempt to update battery level
         level = self.dongle.read_battery_level()
         if not (level is None):
-            QMetaObject.invokeMethod(self.battery_level, "setValue",
-                                     Qt.QueuedConnection, Q_ARG(int, level))
+            self.update.batteryUpdate.emit(level)
 
         # Enable IMU/EMG readings and callback functions
         self.dongle.set_sleep_mode(False)
@@ -137,8 +152,7 @@ class MyoDataWorker(QRunnable):
         :param orient_w/x/y/z: Magnetometer readings, corresponding to a unit quaternion.
         :param accel_1/2/3: Accelerometer readings.
         :param gyro_1/2/3: Gyroscope readings.
-
-        :return: None
+        :param sample_num: [int] 1/2 : Sample 1 or 2 (data is sent in pairs)
         """
 
         if self.running:
@@ -183,14 +197,19 @@ class MyoDataWorker(QRunnable):
             # Orientation values are multipled by the following constant (units of a unit quaternion)
             MYOHW_ORIENTATION_SCALE = 16384.0
 
+            #
             # Update list of all data collected (with correct rescaling)
+            #
+            current_label = self.get_current_label()                        # Grabbed from GT Helper
+
             self.data_list.append((time_received, self.samples_count, emg_list,
                                         [orient_w / MYOHW_ORIENTATION_SCALE, orient_x / MYOHW_ORIENTATION_SCALE,
                                          orient_y / MYOHW_ORIENTATION_SCALE, orient_z / MYOHW_ORIENTATION_SCALE],
                                         [accel_1 / MYOHW_ACCELEROMETER_SCALE, accel_2 / MYOHW_ACCELEROMETER_SCALE,
                                          accel_3 / MYOHW_ACCELEROMETER_SCALE],
                                         [gyro_1 / MYOHW_GYROSCOPE_SCALE, gyro_2 / MYOHW_GYROSCOPE_SCALE,
-                                         gyro_3 / MYOHW_GYROSCOPE_SCALE]))
+                                         gyro_3 / MYOHW_GYROSCOPE_SCALE],
+                                        current_label))
 
             # Update list of all data collected (without scaling)
             #
@@ -212,6 +231,7 @@ class MyoSearchWorker(QRunnable):
         :param cur_port: A communication port to search for Myo devices on.
         :param progress_bar: A progress bar to update.
         :param finished_callback: A callback function, called after searching is complete.
+        :param increments: Number of increments to progress bar.
         """
         super().__init__()
         self.cur_port       = cur_port
@@ -220,7 +240,6 @@ class MyoSearchWorker(QRunnable):
         self.finish.searchComplete.connect(finished_callback)
 
         # States
-        self.running    = False
         self.complete   = False
 
         #
@@ -232,9 +251,8 @@ class MyoSearchWorker(QRunnable):
 
     def run(self):
         self.complete   = False
-        self.running    = True
 
-        while (self.currrent_increment <= self.increments) and (self.running):
+        while self.currrent_increment <= self.increments:
 
             if self.currrent_increment == 0:
                 self.myo_dongle = MyoDongle(self.cur_port)
@@ -251,9 +269,8 @@ class MyoSearchWorker(QRunnable):
 
             # Done searching!
             if self.currrent_increment > self.increments:
-                self.background_thread.join()  # Wait for work completion
-                if len(self.myo_found) > 0:
-                    self.finish.searchComplete.emit()
+                self.background_thread.join()               # Wait for work completion
+                self.finish.searchComplete.emit()
 
             else:
                 # Inter-thread communication (GUI thread will make the call to update the progress bar):
@@ -263,15 +280,33 @@ class MyoSearchWorker(QRunnable):
 
         # Clear Myo device states and disconnect
         self.myo_dongle.clear_state()
-        self.running    = False
         self.complete   = True
 
 
 class GroundTruthWorker(QRunnable):
+    """
+        A background worker that controls playback of videos and text field updates, for the GT Helper.
+    """
 
     def __init__(self, status_label, progress_label, desc_title, desc_explain, cur_movement, video_player,
                     all_video_paths, collect_duration, rest_duration, num_reps, on_worker_started, on_worker_unpaused,
                     on_worker_paused, on_worker_stopped):
+        """
+        :param status_label:
+        :param progress_label:
+        :param desc_title:
+        :param desc_explain:
+        :param cur_movement:
+        :param video_player:
+        :param all_video_paths:
+        :param collect_duration:
+        :param rest_duration:
+        :param num_reps:
+        :param on_worker_started:
+        :param on_worker_unpaused:
+        :param on_worker_paused:
+        :param on_worker_stopped:
+        """
         super().__init__()
 
         self.status_label       = status_label
@@ -315,10 +350,14 @@ class GroundTruthWorker(QRunnable):
         self.stopped            = False
         self.paused             = False
         self.current_label      = None
+        self.complete           = False
 
+    # On finish of repetition/rest/prepation
     class StateComplete(QObject):
         stateEnded = pyqtSignal()
 
+    # Qt5, QMediaPlayer enum
+    # > "Defines the status of a media player's current media."
     class MediaStatus(Enum):
         UnknownMediaStatus  = 0
         NoMedia             = 1
@@ -333,14 +372,21 @@ class GroundTruthWorker(QRunnable):
     def run(self):
 
         # Re-enable video buttons
+        self.complete = False
         self.update.workerStarted.emit()
 
         for exercise in self.all_video_paths:
+
+            if self.stopped:
+                break
+
             ex_label    = exercise[0]
             video_paths = exercise[1]
 
             for movement_num, video_path in enumerate(video_paths):
 
+                if self.stopped:
+                    break
                 #
                 # Setup for current movement
                 #
@@ -361,13 +407,13 @@ class GroundTruthWorker(QRunnable):
                 self.status_label.setText("Preparing for repetition 1...")
                 self.status_label.setStyleSheet("font-weight: bold; font-size: 18pt; color: blue;")
                 self.play_video(video_path, self.preparation_period)
-                self.set_current_label(ex_label, movement_num + 1)
+                self.current_label = None
 
-                while self.video_playing or self.paused:
+                while self.video_playing or (self.paused and not self.stopped):
                     time.sleep(self.timer_interval / 1000)
 
                 if self.stopped:
-                    return
+                    break
 
                 #
                 # Collecting\resting periods
@@ -381,33 +427,49 @@ class GroundTruthWorker(QRunnable):
                     self.play_video(video_path, self.collect_duration)
                     self.set_current_label(ex_label, movement_num + 1)
 
-                    while self.video_playing or self.paused:
+                    while self.video_playing or (self.paused and not self.stopped):
                         time.sleep(self.timer_interval / 1000)
 
                     if self.stopped:
-                        return
+                        break
 
                     # Rest
                     if self.current_rep != self.num_reps:
                         self.status_label.setText("Resting before repetition {}...".format(self.current_rep + 1))
                         self.status_label.setStyleSheet("font-weight: bold; font-size: 18pt; color: orange;")
                         self.play_video(video_path, self.collect_duration)
-                        self.set_current_label(ex_label, 0)
+                        self.current_label = 0
 
-                        while self.video_playing or self.paused:
+                        while self.video_playing or (self.paused and not self.stopped):
                             time.sleep(self.timer_interval / 1000)
 
-
                     if self.stopped:
-                        return
+                        break
+
+        #
+        # If user pressed stop
+        #
+        if self.stopped:
+            self.update.workerStopped.emit()
+        self.complete = True
 
     def play_video(self, video_path, period):
+        """
+            Prepare video for playback, media_status_changed is called when loading finishes.
+
+        :param video_path: Path to video
+        :param period: Time to play video
+        """
         self.video_playing      = True
         self.state_time_remain  = period
         abs_path                = QFileInfo(video_path).absoluteFilePath()
         self.video_player.setMedia(QMediaContent(QUrl.fromLocalFile(abs_path)))
 
     def media_status_changed(self, state):
+        """
+            This function is called when the media player's media finishes loading/playing/etc.
+        :param state: State corresponding to media player update
+        """
         if state == self.MediaStatus.LoadedMedia.value:
             self.video_player.play()
             self.timer.start(self.timer_interval)
@@ -416,6 +478,9 @@ class GroundTruthWorker(QRunnable):
                 self.video_player.play()
 
     def timer_update(self):
+        """
+            This function is called every "self.timer_interval" seconds, upon timer completion.
+        """
         self.state_time_remain = max(0, self.state_time_remain - self.timer_interval/1000)
         self.progress_label.setText("{}s ({} / {})".format("{0:.1f}".format(self.state_time_remain),
                                                                 self.current_rep, self.num_reps))
@@ -424,9 +489,12 @@ class GroundTruthWorker(QRunnable):
             self.state_end_event.stateEnded.emit()
 
     def set_current_label(self, ex_label, movement_num):
-        if movement_num == 0:
-            self.current_label = 0
-        elif ex_label == "A":
+        """
+            Computes the ground truth label
+        :param ex_label: [str] Exercise "A/B/C"
+        :param movement_num: [int] Movement number
+        """
+        if ex_label == "A":
             self.current_label = movement_num
         elif ex_label == "B":
             self.current_label = movement_num + self.num_class_A
@@ -434,17 +502,25 @@ class GroundTruthWorker(QRunnable):
             self.current_label = movement_num + self.num_class_A + self.num_class_B
 
     def stop_state(self):
+        """
+            Upon completion of a repetition/rest/prepation state, this function is called.
+        """
         self.video_player.stop()
         self.video_playing = False
 
     def force_stop(self):
+        """
+            GroundTruthHelper calls this function to stop this background worker thread.
+        """
         self.timer.stop()
         self.video_player.stop()
         self.video_playing  = False
         self.stopped        = True
-        self.update.workerStopped.emit()
 
     def force_pause(self):
+        """
+            GroundTruthHelper calls this function to pause this background worker thread.
+        """
         self.timer.stop()
         self.video_player.pause()
         self.paused = True
@@ -453,6 +529,9 @@ class GroundTruthWorker(QRunnable):
         self.update.workerPaused.emit()
 
     def force_unpause(self):
+        """
+            GroundTruthHelper calls this function to unpause this background worker thread.
+        """
         self.timer.start(self.timer_interval)
         self.video_player.play()
         self.paused = False

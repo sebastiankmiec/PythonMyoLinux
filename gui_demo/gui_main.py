@@ -8,7 +8,8 @@ from PyQt5.QtWidgets import (QWidget, QLabel, QLineEdit, QPushButton, QGridLayou
 from PyQt5.QtGui import QFontMetrics, QIcon
 from PyQt5.QtCore import Qt, QThreadPool, QObject, pyqtSignal
 import pyqtgraph as pg
-from pyqtgraph import GraphicsLayout
+
+# Old backend:
 # from PyQt5.QtChart import QChartView
 
 #
@@ -66,15 +67,17 @@ class TopLevel(QWidget):
 
         self.myo_counts = []                # The number of Myo devices found, via a given communication port
 
+        self.close_event = self.Exit()      # Thread cleanup on exit
+        self.close_event.exitClicked.connect(self.stop_background_workers)
 
+        # States
+        self.ports_searching    = {}
+        self.gt_helper_open     = False     # Ground truth helper
+
+        # Configurable
         self.start_time     = time.time()
         self.data_directory = None
         self.increments     = 100           # Number of progress bar increments (when searching for Myo devices)
-
-        self.gt_helper_open = False         # Ground truth helper
-
-        self.close_event = self.Exit()
-        self.close_event.exitClicked.connect(self.stop_background_workers)
         self.worker_check_period = 1        # seconds
 
         self.initUI()
@@ -114,10 +117,9 @@ class TopLevel(QWidget):
         #self.myo_1_charts = [QChartView() for x in range(8)]               # EMG data plots
         #self.myo_2_charts = [QChartView() for x in range(8)]
 
-        # Custom y-axis for EMG plots
-        def custom_y_ticks(*args):
-            return [(200.0, [-128, 0, 127]), (100.0, [-80, -40, 40, 80])]
-
+        #
+        # Helper function used below
+        #
         def initialize_plots(charts_list, layouts_list, top_tab, device_num):
             """
                 A helper function that initializes all plots (for both devices, and all channels)
@@ -126,10 +128,16 @@ class TopLevel(QWidget):
             :param layouts_list: A list of GraphicsLayoutWidget
             :param top_tab: A top level tab per device
             :param device_num: The device number (1/2)
-            :return:
             """
 
-            for i, chart in enumerate(charts_list):                       # Channels 1-8 subtabs
+            # Custom y-axis for EMG plots
+            def custom_y_ticks(*args):
+                return [(200.0, [-128, 0, 127]), (100.0, [-80, -40, 40, 80])]
+
+            #
+            # Channels 1-8 subtabs
+            #
+            for i, chart in enumerate(charts_list):
 
                 brush = pg.functions.mkBrush(255, 255, 255)
                 layouts_list[i].setBackgroundBrush(brush)
@@ -185,9 +193,7 @@ class TopLevel(QWidget):
         #
         # Data Saving Options
         #
-        self.data_gen_box = QGroupBox()                                     # Data Saving Options layout
-        #self.data_gen_box.setObjectName("DataGroupBox")
-        #self.data_gen_box.setStyleSheet("QGroupBox#DataGroupBox { border: 2px solid black;}")
+        self.data_gen_box = QGroupBox()                                                 # Data Saving Options layout
         self.data_gen_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         top_layout          = QVBoxLayout()
@@ -207,7 +213,8 @@ class TopLevel(QWidget):
         top_inner_layout.setSpacing(10)
         top_inner_layout.setContentsMargins(10, 10, 10, 10)
 
-        buttons_layout      = QHBoxLayout()                                 # "Save" and "GT Helper" buttons
+        # "Save" and "GT Helper" buttons
+        buttons_layout      = QHBoxLayout()
         path_layout         = QHBoxLayout()                                 # Line to enter path
 
         separator = QFrame()
@@ -245,6 +252,10 @@ class TopLevel(QWidget):
         self.show()
 
     def stop_background_workers(self):
+        """
+            This function is called on (user click-initiated) exit of the main window.
+        """
+
         #
         # Wait on Myo search workers to complete
         #
@@ -288,6 +299,25 @@ class TopLevel(QWidget):
             if waiting_on_search:
                 time.sleep(self.worker_check_period)
 
+        #
+        # Stop GT Helper
+        #
+        if not (self.gt_helper.worker is None):
+            self.gt_helper.stop_videos()
+
+            while not (self.gt_helper.worker.complete):
+                time.sleep(self.worker_check_period)
+
+    def get_current_label(self):
+        """
+            Passes the current ground truth label of the movement being performed from GT helper to data workers.
+
+        :return: [int] Ground truth label of current movement
+        """
+        if self.gt_helper_open:
+            return self.gt_helper.get_current_label()
+        else:
+            return -1
 
     def gt_helper_closed(self):
         self.gt_helper_open = False
@@ -295,8 +325,8 @@ class TopLevel(QWidget):
     def file_browser_clicked(self):
         """
             File explorer button clicked.
-        :return: None
         """
+
         dialog = QFileDialog()
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly)
@@ -308,7 +338,6 @@ class TopLevel(QWidget):
     def save_clicked(self):
         """
             Save button clicked.
-        :return: None
         """
 
         if ( ((self.data_directory is None) or (not exists(self.data_directory))) and
@@ -339,10 +368,12 @@ class TopLevel(QWidget):
             orient_list = data[3]
             accel_list  = data[4]
             gyro_list   = data[5]
+            label       = data[6]
 
             # Write to file descriptor
-            fd.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n".format(
-                cur_time - base_time, index,
+            fd.write("{:.4f},{},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
+                     "{:.4f},{:.4f}\n".format(
+                cur_time - base_time, index, label,
                 emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
                 emg_list[5], emg_list[6], emg_list[7],
                 orient_list[0], orient_list[1], orient_list[2], orient_list[3],
@@ -370,11 +401,11 @@ class TopLevel(QWidget):
             fd_all  = open(full_path_all, "w")
 
             # Headers
-            fd_1.write("Time, Index, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+            fd_1.write("Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                      "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
-            fd_2.write("Time, Index, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+            fd_2.write("Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                      "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
-            fd_all.write("Time_1, Time_2, D1_EMG_1, D1_EMG_2, D1_EMG_3, D1_EMG_4, D1_EMG_5, D1_EMG_6, D1_EMG_7,"
+            fd_all.write("Time_1, Time_2, Label, D1_EMG_1, D1_EMG_2, D1_EMG_3, D1_EMG_4, D1_EMG_5, D1_EMG_6, D1_EMG_7,"
                          " D1_EMG_8, D1_OR_W, D1_OR_X, D1_OR_Y, D1_OR_Z, D1_ACC_1, D1_ACC_2, D1_ACC_3, D1_GYRO_1,"
                          " D1_GYRO_2, D1_GYRO_3,"
                          " D2_EMG_1, D2_EMG_2, D2_EMG_3, D2_EMG_4, D2_EMG_5, D2_EMG_6, D2_EMG_7, D2_EMG_8, D2_OR_W,"
@@ -447,6 +478,7 @@ class TopLevel(QWidget):
                 orient_list = data[3]
                 accel_list  = data[4]
                 gyro_list   = data[5]
+                label_one   = data[6]                               # Label, as per device one (not device two)
 
                 cur_sec_data    = sec_myo_data[second_offset]       # Single data point (device two)
                 cur_time_2      = cur_sec_data[0]
@@ -488,21 +520,24 @@ class TopLevel(QWidget):
                     continue
 
                 # Write to file descriptor
-                fd_all.write("{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},"
-                                "{},{},{},{},{},{},{},{},{}\n".format(
-                    first_delta_time, sec_delta_time,
-                    emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
-                    emg_list[5], emg_list[6], emg_list[7],
-                    orient_list[0], orient_list[1], orient_list[2], orient_list[3],
-                    accel_list[0], accel_list[1], accel_list[2],
-                    gyro_list[0], gyro_list[1], gyro_list[2],
+                fd_all.write("{:.4f},{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
+                             "{:.4f},{:.4f},{:.4f},{:.4f},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
+                             "{:.4f},{:.4f},{:.4f},{:.4f},{:.4f}\n".
+                    format(
+                        first_delta_time, sec_delta_time, label_one,
+                        emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
+                        emg_list[5], emg_list[6], emg_list[7],
+                        orient_list[0], orient_list[1], orient_list[2], orient_list[3],
+                        accel_list[0], accel_list[1], accel_list[2],
+                        gyro_list[0], gyro_list[1], gyro_list[2],
 
-                    emg_list_2[0], emg_list_2[1], emg_list_2[2], emg_list_2[3], emg_list_2[4],
-                    emg_list_2[5], emg_list_2[6], emg_list_2[7],
-                    orient_list_2[0], orient_list_2[1], orient_list_2[2], orient_list_2[3],
-                    accel_list_2[0], accel_list_2[1], accel_list_2[2],
-                    gyro_list_2[0], gyro_list_2[1], gyro_list_2[2]
-                ))
+                        emg_list_2[0], emg_list_2[1], emg_list_2[2], emg_list_2[3], emg_list_2[4],
+                        emg_list_2[5], emg_list_2[6], emg_list_2[7],
+                        orient_list_2[0], orient_list_2[1], orient_list_2[2], orient_list_2[3],
+                        accel_list_2[0], accel_list_2[1], accel_list_2[2],
+                        gyro_list_2[0], gyro_list_2[1], gyro_list_2[2]
+                    )
+                )
                 second_offset += 1
 
             fd_1.close()
@@ -527,7 +562,7 @@ class TopLevel(QWidget):
 
             # Create file, write header
             fd = open(full_path, "w")
-            fd.write("Time, Index, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+            fd.write("Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                         "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
 
             # Save data points
@@ -544,12 +579,25 @@ class TopLevel(QWidget):
             self.gt_helper_open = True
             self.gt_helper.show()
 
-
     def find_ports(self):
         """
             Find available serial USB interfaces (character device files, /dev/tty*), corresponding to Myo dongles.
-        :return: None
         """
+
+        #
+        # If a port is searching for Myo devices, wait
+        #
+        port_searching = False
+        for port in self.ports_searching.keys():
+            if self.ports_searching[port]:
+                port_searching = True
+                break
+
+        if port_searching:
+            self.warning = QErrorMessage()
+            self.warning.showMessage("A port is currently searching for devices.")
+            self.warning.show()
+            return
 
         self.myo_counts.clear()
         self.ports_found.clear()
@@ -590,13 +638,23 @@ class TopLevel(QWidget):
         """
             On a click event (may not be a port), search for Myo devices using this port.
         :param e: A click event on a port (ideally).
-        :return: None
         """
+
         try:
             index   = e.port_idx    # Port number
             port    = e.port        # /dev/ttyXYZ
         except:
             return
+
+        #
+        # Port is already searching
+        #
+        if port in self.ports_searching:
+            if self.ports_searching[port]:
+                self.warning = QErrorMessage()
+                self.warning.showMessage("This port is already searching for devices.")
+                self.warning.show()
+                return
 
         #
         # First, clear Myo devices previously found on this port
@@ -623,6 +681,7 @@ class TopLevel(QWidget):
         # Create background thread to search for Myo devices
         #
         self.myo_counts[index] = 0
+        self.ports_searching[port] = True
         worker = MyoSearchWorker(port, progress, partial(self.devices_found,
                                                                             thread_idx = len(self.search_threads),
                                                                             port = port,
@@ -640,6 +699,10 @@ class TopLevel(QWidget):
         :param myo_count_index: Index to list storing number of Myo devices found for a given port
         :return:
         """
+        self.ports_searching[port] = False
+
+        if len(self.search_threads[thread_idx].myo_found) == 0:
+            return
 
         # Find index to insert found Myo results
         list_index = 0
@@ -656,7 +719,10 @@ class TopLevel(QWidget):
             #
             # Holds relevant information about Myo found, and reacts to user actions
             #
-            widget = MyoFoundWidget(port, device, self.connection_made, self.connection_dropped)
+            widget = MyoFoundWidget(port, device, self.connection_made, self.connection_dropped,
+                                        self.get_current_label, partial(self.battery_update,
+                                                                        device_address = device["sender_address"])
+                                    )
 
             # Add to list of Myo dongles and devices found
             temp_widget.setSizeHint(widget.sizeHint())
@@ -664,11 +730,33 @@ class TopLevel(QWidget):
             self.ports_found.setItemWidget(temp_widget, widget)
             self.myo_counts[myo_count_index] += 1
 
+    def battery_update(self, battery_level, device_address):
+        """
+            This function is called after a data worker receives a battery service response from a Myo device.
+                --> Updates the ports found list with accurate battery levels.
+
+        :param battery_level: [int] The current battery level of some Myo device.
+        :param device_address: [bytes] The MAC address of the corresponding Myo device.
+        """
+
+        num_widgets = self.ports_found.count()
+        for idx in range(num_widgets):
+
+            # Ignore port widgets (only interested in Myo device rows)
+            list_widget = self.ports_found.item(idx)
+            if hasattr(list_widget, "port_idx"):
+                continue
+
+            myo_widget = self.ports_found.itemWidget(list_widget)
+
+            if myo_widget.myo_device["sender_address"].endswith(device_address):
+                myo_widget.battery_level.setValue(battery_level)
+
     def connection_dropped(self, address):
         """
                 Prior to disconnecting from a Myo device, this function is called to ensure a disconnect is valid.
+
         :param address: Address of Myo device.
-        :return: None
         """
 
         def throw_error_message(self, message):
@@ -715,11 +803,14 @@ class TopLevel(QWidget):
     def connection_made(self, address, port):
         """
             Prior to connecting to a Myo device, this function is called to ensure a connection can be made.
+
         :param address: Address of Myo device.
         :param port: Communication port to be used for connection.
-        :return: (index, charts, myo_data)
+        :return: (top_tab_idx, obj, index, charts, myo_data)
 
             Where:
+                top_tab_idx: Regers to the index of the top most tab open (Myo Device 1 or 2)
+                obj: Allows MyoFoundWidget to determine which tab it controls
                 index: Refers to index of channel tab open
                 charts: Refers to one of two chart objects that should be filled with EMG data visualizations
                 myo_data: Refers to a list that should be filled with incoming EMG/IMU data
