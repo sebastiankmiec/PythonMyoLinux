@@ -35,12 +35,26 @@ from param import *
 # from PyQt5.QtChart import QLineSeries, QValueAxis
 
 
+########################################################################################################################
+#
+# Custom PyQt5 events (emitted by DataTools)
+#
+########################################################################################################################
+
+# Used by MyoDataWorker
+class DataTabUpdate(QObject):
+    connectUpdate       = pyqtSignal([bytes, int, int])
+    disconnectUpdate    = pyqtSignal([bytes])
+
+########################################################################################################################
+
+
 class DataTools(QWidget):
     """
         A top level widget containing all other widgets used for the "Data Tools" tab.
     """
 
-    def __init__(self):
+    def __init__(self, on_device_connected, on_device_disconnected, is_data_tools_open):
         super().__init__()
 
         self.myo_devices = []
@@ -48,15 +62,19 @@ class DataTools(QWidget):
         self.first_port = None
         self.second_myo = None
         self.second_port = None
+        self.is_data_tools_open = is_data_tools_open
 
         self.first_myo_data = []  # Data collected by event handlers
         self.second_myo_data = []
 
         self.progress_bars = []  # Progress bars, used when searching for Myo armband devies
         self.search_threads = []  # Background threads that scan for advertising packets from advertising
-        # Myo armband devices.
-
         self.myo_counts = []  # The number of Myo devices found, via a given communication port
+
+        # Emitted signals
+        self.data_tab_signals = DataTabUpdate()
+        self.data_tab_signals.connectUpdate.connect(on_device_connected)
+        self.data_tab_signals.disconnectUpdate.connect(on_device_disconnected)
 
         # States
         self.ports_searching = {}
@@ -696,8 +714,9 @@ class DataTools(QWidget):
             # Holds relevant information about Myo found, and reacts to user actions
             #
             widget = MyoFoundWidget(port, device, self.connection_made, self.connection_dropped,
-                                    self.get_current_label, partial(self.battery_update,
-                                                                    device_address=device["sender_address"])
+                                        self.get_current_label, partial(self.battery_update,
+                                                                    device_address=device["sender_address"]),
+                                        self.data_tab_signals, self.is_data_tools_open
                                     )
 
             # Add to list of Myo dongles and devices found
@@ -844,7 +863,8 @@ class MyoFoundWidget(QWidget):
         A Widget for a Myo found list entry, that provides the ability to connect/disconnect.
     """
 
-    def __init__(self, port, myo_device, connect_notify, disconnect_notify, get_current_label, battery_notify):
+    def __init__(self, port, myo_device, connect_notify, disconnect_notify, get_current_label, battery_notify,
+                    data_tab_signals, is_data_tools_open):
         """
 
         :param port: The port used to find this device.
@@ -864,6 +884,8 @@ class MyoFoundWidget(QWidget):
         self.disconnect_notify = disconnect_notify
         self.get_current_label = get_current_label
         self.battery_notify = battery_notify
+        self.data_tab_signals = data_tab_signals
+        self.is_data_tools_open = is_data_tools_open
 
         # States
         self.connected = False
@@ -872,9 +894,9 @@ class MyoFoundWidget(QWidget):
         # Configurable parameters
         self.num_trim_samples = 400  # On unexpected disconnect, or user-initiated disconnect, trim this many samples
         #       from the list of all collected data thus far.
-        self.initUI()
+        self.init_UI()
 
-    def initUI(self):
+    def init_UI(self):
 
         # Layout
         topLayout = QVBoxLayout()
@@ -991,7 +1013,8 @@ class MyoFoundWidget(QWidget):
             self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
                                         self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
                                         self.on_worker_stopped, self.connect_failed, self.on_discon_occurred,
-                                        self.battery_notify, self.create_event, self.get_current_label)
+                                        self.battery_notify, self.create_event, self.get_current_label,
+                                        self.data_tab_signals, self.is_data_tools_open)
 
             self.worker.setAutoDelete(False)  # We reuse this worker
 
@@ -1182,7 +1205,7 @@ class GroundTruthHelper(QMainWindow):
         :param parent: Parent widget
         :param close_function: A function called upon user exit of the GroundTruthHelper window.
         """
-        super(GroundTruthHelper, self).__init__(parent)
+        super().__init__()
 
         self.close_event = self.Exit()
         if close_function is not None:
@@ -1210,9 +1233,9 @@ class GroundTruthHelper(QMainWindow):
         self.pausing = False
         self.shutdown = False
 
-        self.initUI()
+        self.init_ui()
 
-    def initUI(self):
+    def init_ui(self):
         self.setGeometry(0, 0, 1024, 768)
 
         #
@@ -1239,8 +1262,8 @@ class GroundTruthHelper(QMainWindow):
         # Video box
         #
         self.setWindowTitle("Ground Truth Helper")
-        self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        videoWidget = QVideoWidget()
+        self.video_player   = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        video_widget        = QVideoWidget()
 
         #
         # Description Box
@@ -1367,7 +1390,7 @@ class GroundTruthHelper(QMainWindow):
         #
         top_layout.addWidget(self.status_label, 0, 0)
         top_layout.addWidget(self.progress_label, 0, 1)
-        top_layout.addWidget(videoWidget, 1, 0)
+        top_layout.addWidget(video_widget, 1, 0)
         top_layout.addWidget(description_box, 1, 1)
         top_layout.addWidget(start_stop_box, 2, 0)
         top_layout.addWidget(parameters_box, 2, 1)
@@ -1381,7 +1404,7 @@ class GroundTruthHelper(QMainWindow):
         # Set widget to contain window contents
         #
         top_level_widget.setLayout(top_layout)
-        self.video_player.setVideoOutput(videoWidget)
+        self.video_player.setVideoOutput(video_widget)
         self.video_player.setMuted(True)
 
     def enable_video_buttons(self, state_play, state_pause, state_stop):
@@ -1677,7 +1700,7 @@ class MyoDataWorker(QRunnable):
 
     def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list,
                  on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred, battery_notify,
-                 create_event, get_current_label):
+                 create_event, get_current_label, data_tab_signals, is_data_tools_open):
         """
         :param port: Port used to create MyoFoundWidget widget.
         :param myo_device: Address of Myo device to interact with.
@@ -1703,6 +1726,8 @@ class MyoDataWorker(QRunnable):
         self.update = DataWorkerUpdate()
         self.create_event = create_event
         self.get_current_label = get_current_label
+        self.data_tab_signals = data_tab_signals
+        self.is_data_tools_open = is_data_tools_open
 
         # Signals
         self.update.axesUpdate.connect(axes_callback)
@@ -1746,6 +1771,7 @@ class MyoDataWorker(QRunnable):
         level = self.dongle.read_battery_level()
         if not (level is None):
             self.update.batteryUpdate.emit(level)
+        self.data_tab_signals.connectUpdate.emit(self.myo_device["sender_address"], self.myo_device["rssi"], level)
 
         # Enable IMU/EMG readings and callback functions
         self.dongle.set_sleep_mode(False)
@@ -1757,6 +1783,7 @@ class MyoDataWorker(QRunnable):
         while self.running and (not disconnect_occurred):
             disconnect_occurred = self.dongle.scan_for_data_packets_conditional(self.scan_period)
 
+        self.data_tab_signals.disconnectUpdate.emit(self.myo_device["sender_address"])
         if disconnect_occurred:
             self.dongle.clear_state()
             self.update.disconOccurred.emit()
@@ -1788,7 +1815,8 @@ class MyoDataWorker(QRunnable):
             self.cur_sample += 1
 
             # Is this tab corresponding to this worker open
-            create_events = self.create_event()
+            create_events   = self.create_event()
+            create_events  &= self.is_data_tools_open()
 
             # Request an axes update for the charts
             if (self.samples_count != 0) and (self.samples_count % NUM_GUI_SAMPLES == 0):
@@ -2084,6 +2112,8 @@ class GroundTruthWorker(QRunnable):
 
                         while self.video_playing or (self.paused and not self.stopped):
                             time.sleep(self.timer_interval / 1000)
+                    else:
+                        self.current_label = None
 
                     if self.stopped:
                         break

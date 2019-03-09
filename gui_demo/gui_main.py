@@ -17,6 +17,8 @@ import time
 #
 from param import *
 from data_tools import DataTools
+from online_train import OnlineTraining
+from online_test import OnlineTesting
 
 ########################################################################################################################
 ########################################################################################################################
@@ -48,15 +50,6 @@ class TopLevel(QWidget):
         self.worker_check_period = 1  # seconds
 
         self.init_ui()
-
-    def init_online_training_tab(self):
-        """
-            Initializes UI elements in the "Online Training" tab
-
-        :return: (QWidget) online_training_tab
-        """
-        online_training_tab = QWidget()
-        return online_training_tab
 
     def init_online_pred_tab(self):
         """
@@ -94,17 +87,26 @@ class TopLevel(QWidget):
         self.tool_tabs.currentChanged.connect(self.on_tab_changed)
         self.cur_index = 0
 
-        self.data_tools_tab = DataTools()
+        self.online_pred_tab        = OnlineTesting()
+        self.online_training_tab    = OnlineTraining()
+        self.data_tools_tab         = DataTools(self.on_device_connected, self.on_device_disconnected,
+                                                    self.is_data_tools_open)
+
         self.tool_tabs.addTab(self.data_tools_tab, "Data Collection")
-
-        online_training_tab = self.init_online_training_tab()
-        self.tool_tabs.addTab(online_training_tab, "Online Training")
-
-        online_pred_tab = self.init_online_pred_tab()
-        self.tool_tabs.addTab(online_pred_tab, "Online Predictions")
+        self.tool_tabs.addTab(self.online_training_tab, "Online Training")
+        self.tool_tabs.addTab(self.online_pred_tab, "Online Predictions")
 
         self.setLayout(tools_layout)
         self.show()
+
+    def is_data_tools_open(self):
+        return self.cur_index == 0
+
+    def on_device_connected(self, address, rssi, battery_level):
+        self.online_pred_tab.device_connected(address, rssi, battery_level)
+
+    def on_device_disconnected(self, address):
+        self.online_pred_tab.device_disconnected(address)
 
     def on_tab_changed(self, value):
         """
@@ -123,28 +125,33 @@ class TopLevel(QWidget):
 
         if self.cur_index == data_tool_idx:
             # Check for incomplete Myo search workers
+            #
+            # waiting_on_search = False
+            # for worker in self.data_tools_tab.search_threads:
+            #     if not worker.complete:
+            #         waiting_on_search = True
+            #         break
             waiting_on_search = False
-            for worker in self.data_tools_tab.search_threads:
-                if not worker.complete:
-                    waiting_on_search = True
-                    break
 
             if not waiting_on_search:
+
                 # Check for background data workers
-                worker_running  = False
-                num_widgets     = self.data_tools_tab.ports_found.count()
-
-                for idx in range(num_widgets):
-                    # Ignore port widgets (only interested in Myo device rows)
-                    list_widget = self.data_tools_tab.ports_found.item(idx)
-                    if hasattr(list_widget, "port_idx"):
-                        continue
-
-                    myo_widget = self.data_tools_tab.ports_found.itemWidget(list_widget)
-                    if not (myo_widget.worker is None):
-                        if not myo_widget.worker.complete:
-                            worker_running = True
-                            break
+                #
+                # worker_running  = False
+                # num_widgets     = self.data_tools_tab.ports_found.count()
+                #
+                # for idx in range(num_widgets):
+                #     # Ignore port widgets (only interested in Myo device rows)
+                #     list_widget = self.data_tools_tab.ports_found.item(idx)
+                #     if hasattr(list_widget, "port_idx"):
+                #         continue
+                #
+                #     myo_widget = self.data_tools_tab.ports_found.itemWidget(list_widget)
+                #     if not (myo_widget.worker is None):
+                #         if not myo_widget.worker.complete:
+                #             worker_running = True
+                #             break
+                worker_running = False
 
                 if not worker_running:
 
