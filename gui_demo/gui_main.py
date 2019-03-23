@@ -87,10 +87,10 @@ class TopLevel(QWidget):
         self.tool_tabs.currentChanged.connect(self.on_tab_changed)
         self.cur_index = 0
 
-        self.online_pred_tab        = OnlineTesting()
         self.online_training_tab    = OnlineTraining()
         self.data_tools_tab         = DataTools(self.on_device_connected, self.on_device_disconnected,
                                                     self.is_data_tools_open)
+        self.online_pred_tab        = OnlineTesting(self.data_tools_tab.data_collected)
 
         self.tool_tabs.addTab(self.data_tools_tab, "Data Collection")
         self.tool_tabs.addTab(self.online_training_tab, "Online Training")
@@ -104,9 +104,11 @@ class TopLevel(QWidget):
 
     def on_device_connected(self, address, rssi, battery_level):
         self.online_pred_tab.device_connected(address, rssi, battery_level)
+        pass
 
     def on_device_disconnected(self, address):
         self.online_pred_tab.device_disconnected(address)
+        pass
 
     def on_tab_changed(self, value):
         """

@@ -6,8 +6,8 @@ from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QTab
                              QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar)
 
 from PyQt5.QtGui import QPixmap, QIcon
-from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl,\
-                            QFileInfo)
+from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl, \
+                          QFileInfo)
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
@@ -43,16 +43,182 @@ from param import *
 
 # Used by MyoDataWorker
 class DataTabUpdate(QObject):
-    connectUpdate       = pyqtSignal([bytes, int, int])
-    disconnectUpdate    = pyqtSignal([bytes])
+    connectUpdate = pyqtSignal([bytes, int, int])
+    disconnectUpdate = pyqtSignal([bytes])
+
 
 ########################################################################################################################
-
 
 class DataTools(QWidget):
     """
         A top level widget containing all other widgets used for the "Data Tools" tab.
     """
+
+    class MyoData:
+
+        class ArmbandData:
+            emg_ch = 8
+            accel_ch = 3
+            orient_ch = 4
+            gyro_ch = 3
+
+            def __init__(self, sync_data, is_master):
+                self.sync_data = sync_data
+                self.is_master = is_master
+                self.timestamps = []
+                self.labels = []
+                self.emg = [[] for x in range(self.emg_ch)]
+                self.accel = [[] for x in range(self.accel_ch)]
+                self.gyro = [[] for x in range(self.gyro_ch)]
+                self.orient = [[] for x in range(self.orient_ch)]
+
+            def clear(self):
+                self.timestamps.clear()
+                self.labels.clear()
+                self.emg = [[] for x in range(self.emg_ch)]
+                self.accel = [[] for x in range(self.accel_ch)]
+                self.gyro = [[] for x in range(self.gyro_ch)]
+                self.orient = [[] for x in range(self.orient_ch)]
+
+            def trim(self, trim_samples):
+                n = len(self.timestamps)
+                self.timestamps = self.timestamps[:n - trim_samples]
+                self.labels = self.labels[:n - trim_samples]
+                self.emg = [x[:n - trim_samples] for x in self.emg]
+                self.accel = [x[:n - trim_samples] for x in self.accel]
+                self.gyro = [x[:n - trim_samples] for x in self.gyro]
+                self.orient = [x[:n - trim_samples] for x in self.orient]
+
+            def add_sample(self, time_received, current_label, emg_list, accel_1, accel_2, accel_3, gyro_1, gyro_2,
+                           gyro_3, orient_w, orient_x, orient_y, orient_z):
+                self.timestamps.append(time_received)
+                self.labels.append(current_label)
+
+                for i, emg_channel in enumerate(emg_list):
+                    self.emg[i].append(emg_channel)
+
+                self.accel[0].append(accel_1 / MYOHW_ACCELEROMETER_SCALE)
+                self.accel[1].append(accel_2 / MYOHW_ACCELEROMETER_SCALE)
+                self.accel[2].append(accel_3 / MYOHW_ACCELEROMETER_SCALE)
+
+                self.gyro[0].append(gyro_1 / MYOHW_GYROSCOPE_SCALE)
+                self.gyro[1].append(gyro_2 / MYOHW_GYROSCOPE_SCALE)
+                self.gyro[2].append(gyro_3 / MYOHW_GYROSCOPE_SCALE)
+
+                self.orient[0].append(orient_w / MYOHW_ORIENTATION_SCALE)
+                self.orient[1].append(orient_x / MYOHW_ORIENTATION_SCALE)
+                self.orient[2].append(orient_y / MYOHW_ORIENTATION_SCALE)
+                self.orient[3].append(orient_z / MYOHW_ORIENTATION_SCALE)
+
+                self.sync_data(self.is_master)
+
+        def __init__(self):
+            self.band_1 = self.ArmbandData(self.synchronize_data, True)
+            self.band_2 = self.ArmbandData(self.synchronize_data, False)
+
+            # Synchronization states (update mapping)
+            self.first_timestamp = None
+            self.first_offset = None
+            self.second_timestamp = None
+            self.second_offset = None
+
+            self.invalid_map = -1
+            self.first_sync = True
+            self.data_mapping = []
+
+        def synchronize_data(self, is_master):
+
+            if is_master:
+                self.data_mapping.append(self.invalid_map)
+
+            #
+            # Default offsets before synchronization begins
+            #
+            if self.first_sync:
+                if is_master:
+                    self.first_offset = len(self.band_1.timestamps) - 1
+                else:
+                    self.second_offset = len(self.band_2.timestamps) - 1
+
+            #
+            # Data needs to be synchronized
+            #
+            if (self.first_offset is not None) and (self.second_offset is not None):
+
+                # Find minimum (timestamp) distance from first device, relative to second device's first timestamp
+                #   Note: Timestamps from both devices are enforced to be strictly increasing (elsewhere)
+                #
+                if self.first_sync:
+                    self.first_sync = False
+                    first_timestamp = self.band_1.timestamps[self.first_offset]
+                    sec_timestamp = self.band_2.timestamps[self.second_offset]
+                    min_distance = abs(first_timestamp - sec_timestamp)
+
+                    while self.first_offset > 0:
+                        temp_idx = self.first_offset - 1
+                        temp_timestamp = self.band_1.timestamps[temp_idx]
+                        new_distance = abs(temp_timestamp - sec_timestamp)
+
+                        if new_distance > min_distance:
+                            break
+                        else:
+                            self.first_offset = temp_idx
+                            min_distance = new_distance
+
+                    self.data_mapping[self.first_offset] = self.second_offset
+
+                else:
+
+                    #
+                    # Need to wait for new data to arrive
+                    #
+                    if ((self.first_offset + 1 >= len(self.band_1.timestamps)) or
+                            (self.second_offset + 1 >= len(self.band_2.timestamps))):
+                        return
+
+                    self.first_offset += 1
+                    self.second_offset += 1
+                    first_timestamp = self.band_1.timestamps[self.first_offset]
+                    sec_timestamp = self.band_2.timestamps[self.second_offset]
+                    min_distance = first_timestamp - sec_timestamp
+                    in_sync = False
+
+                    if abs(min_distance) < COPY_THRESHOLD:
+                        in_sync = True
+                    else:
+
+                        if min_distance > 0:
+                            while self.first_offset < len(self.band_1.timestamps):
+                                temp_timestamp = self.band_1.timestamps[self.first_offset]
+                                temp_distance = temp_timestamp - sec_timestamp
+
+                                if abs(temp_distance) > abs(min_distance):
+                                    break
+                                if self.first_offset < len(self.band_1.timestamps) - 1:
+                                    self.first_offset += 1
+                                    min_distance = temp_distance
+
+                            if abs(min_distance) < COPY_THRESHOLD:
+                                in_sync = True
+
+                        # min_distance <= (-1) * COPY_THRESHOLD
+                        else:
+                            while self.second_offset < len(self.band_2.timestamps):
+                                temp_timestamp = self.band_2.timestamps[self.second_offset]
+                                temp_distance = first_timestamp - temp_timestamp
+
+                                if abs(temp_distance) > abs(min_distance):
+                                    break
+                                if self.second_offset < len(self.band_2.timestamps) - 1:
+                                    self.second_offset += 1
+                                    min_distance = temp_distance
+
+                            if abs(min_distance) < COPY_THRESHOLD:
+                                in_sync = True
+
+                    # Data from two devices is (now) synchronized
+                    if in_sync:
+                        self.data_mapping[self.first_offset] = self.second_offset
 
     def __init__(self, on_device_connected, on_device_disconnected, is_data_tools_open):
         super().__init__()
@@ -64,8 +230,7 @@ class DataTools(QWidget):
         self.second_port = None
         self.is_data_tools_open = is_data_tools_open
 
-        self.first_myo_data = []  # Data collected by event handlers
-        self.second_myo_data = []
+        self.data_collected = self.MyoData()
 
         self.progress_bars = []  # Progress bars, used when searching for Myo armband devies
         self.search_threads = []  # Background threads that scan for advertising packets from advertising
@@ -356,22 +521,21 @@ class DataTools(QWidget):
         #
         # Helper function that saves one data point to a file descriptor (for a file containing a single device)
         #
-        def write_single(data, fd):
+        def write_single(self, armband_data, index, fd):
 
             # See "create_emg_event" for details:
             base_time = self.start_time
-            cur_time = data[0]
-            index = data[1]
-            emg_list = data[2]
-            orient_list = data[3]
-            accel_list = data[4]
-            gyro_list = data[5]
-            label = data[6]
+            cur_time = armband_data.timestamps[index]
+            emg_list = [x[index] for x in armband_data.emg]
+            orient_list = [x[index] for x in armband_data.orient]
+            accel_list = [x[index] for x in armband_data.accel]
+            gyro_list = [x[index] for x in armband_data.gyro]
+            label = armband_data.labels[index]
 
             # Write to file descriptor
-            fd.write("{:.4f},{},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
+            fd.write("{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
                      "{:.4f},{:.4f}\n".format(
-                cur_time - base_time, index, label,
+                cur_time - base_time, label,
                 emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
                 emg_list[5], emg_list[6], emg_list[7],
                 orient_list[0], orient_list[1], orient_list[2], orient_list[3],
@@ -379,17 +543,18 @@ class DataTools(QWidget):
                 gyro_list[0], gyro_list[1], gyro_list[2]
             ))
 
-        if (len(self.first_myo_data) == 0) and (len(self.second_myo_data) == 0):
+        if (len(self.data_collected.band_1.timestamps) == 0) and (len(self.data_collected.band_2.timestamps) == 0):
             self.warn_user("No data available to save.")
 
         # Multiple myo devices to save data from
-        elif (len(self.first_myo_data) != 0) and (len(self.second_myo_data) != 0):
+        elif (len(self.data_collected.band_1.timestamps) != 0) and (len(self.data_collected.band_2.timestamps) != 0):
 
             full_path_1 = join(self.data_directory, FILENAME_1)
             full_path_2 = join(self.data_directory, FILENAME_2)
             full_path_all = join(self.data_directory, FILENAME_all)
-            first_myo_data = copy.deepcopy(self.first_myo_data)
-            sec_myo_data = copy.deepcopy(self.second_myo_data)
+            first_myo_data = copy.deepcopy(self.data_collected.band_1)
+            sec_myo_data = copy.deepcopy(self.data_collected.band_2)
+            data_mapping = copy.deepcopy(self.data_collected.data_mapping)
 
             # File descriptors for 3 created files
             fd_1 = open(full_path_1, "w")
@@ -398,10 +563,10 @@ class DataTools(QWidget):
 
             # Headers
             fd_1.write(
-                "Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+                "Time, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                 "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
             fd_2.write(
-                "Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+                "Time, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                 "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
             fd_all.write("Time_1, Time_2, Label, D1_EMG_1, D1_EMG_2, D1_EMG_3, D1_EMG_4, D1_EMG_5, D1_EMG_6, D1_EMG_7,"
                          " D1_EMG_8, D1_OR_W, D1_OR_X, D1_OR_Y, D1_OR_Z, D1_ACC_1, D1_ACC_2, D1_ACC_3, D1_GYRO_1,"
@@ -415,14 +580,14 @@ class DataTools(QWidget):
             max_first = float("-inf")
             min_last = float("inf")
 
-            if max_first < first_myo_data[0][0]:
-                max_first = first_myo_data[0][0]
-            if max_first < sec_myo_data[0][0]:
-                max_first = sec_myo_data[0][0]
-            if min_last > first_myo_data[len(first_myo_data) - 1][0]:
-                min_last = first_myo_data[len(first_myo_data) - 1][0]
-            if min_last > sec_myo_data[len(sec_myo_data) - 1][0]:
-                min_last = sec_myo_data[len(sec_myo_data) - 1][0]
+            if max_first < first_myo_data.timestamps[0]:
+                max_first = first_myo_data.timestamps[0]
+            if max_first < sec_myo_data.timestamps[0]:
+                max_first = sec_myo_data.timestamps[0]
+            if min_last > first_myo_data.timestamps[len(first_myo_data.timestamps) - 1]:
+                min_last = first_myo_data.timestamps[len(first_myo_data.timestamps) - 1]
+            if min_last > sec_myo_data.timestamps[len(sec_myo_data.timestamps) - 1]:
+                min_last = sec_myo_data.timestamps[len(sec_myo_data.timestamps) - 1]
 
             # Define time of first data point (using a buffer period)
             start_time = max_first + BUFFER_PERIOD
@@ -441,79 +606,47 @@ class DataTools(QWidget):
             first_idx = None
             sec_idx = None
 
-            for i, data in enumerate(first_myo_data):
-                time = data[0]
+            for i, time in enumerate(first_myo_data.timestamps):
                 if abs(start_time - time) < min_first_dist:
                     min_first_dist = abs(start_time - time)
                     first_idx = i
-                write_single(data, fd_1)
-            for i, data in enumerate(sec_myo_data):
-                time = data[0]
-                if abs(start_time - time) < min_sec_dist:
-                    min_sec_dist = abs(start_time - time)
-                    sec_idx = i
-                    write_single(data, fd_2)
+                write_single(self, first_myo_data, i, fd_1)
+            for i, time in enumerate(sec_myo_data.timestamps):
+                write_single(self, sec_myo_data, i, fd_2)
 
             #
-            # Attempt to create a file with data synchronized file (using timestamps)
+            # Attempt to create a file with (previously) synchronized data
             #
-            second_offset = sec_idx  # Index to data of second device
-
-            for first_offset, data in enumerate(first_myo_data):
+            for first_offset in range(len(first_myo_data.timestamps)):
                 if first_offset < first_idx:
                     continue
-                if second_offset >= len(sec_myo_data):
-                    break
+                second_offset = data_mapping[first_offset]
+
+                # Impossible to synchronize data (adequately)
+                if second_offset == self.data_collected.invalid_map:
+                    continue
 
                 #
                 # See "create_emg_event" for details:
                 #
-                base_time = self.start_time  # Single data point (device one)
-                cur_time = data[0]
-                emg_list = data[2]
-                orient_list = data[3]
-                accel_list = data[4]
-                gyro_list = data[5]
-                label_one = data[6]  # Label, as per device one (not device two)
+                cur_time = first_myo_data.timestamps[first_offset]
+                emg_list = [x[first_offset] for x in first_myo_data.emg]
+                orient_list = [x[first_offset] for x in first_myo_data.orient]
+                accel_list = [x[first_offset] for x in first_myo_data.accel]
+                gyro_list = [x[first_offset] for x in first_myo_data.gyro]
+                label_one = first_myo_data.labels[first_offset]  # Label, as per device one (not device two)
 
-                cur_sec_data = sec_myo_data[second_offset]  # Single data point (device two)
-                cur_time_2 = cur_sec_data[0]
+                # Second device sample
+                cur_time_2 = sec_myo_data.timestamps[second_offset]
+                emg_list_2 = [x[second_offset] for x in sec_myo_data.emg]
+                orient_list_2 = [x[second_offset] for x in sec_myo_data.orient]
+                accel_list_2 = [x[second_offset] for x in sec_myo_data.accel]
+                gyro_list_2 = [x[second_offset] for x in sec_myo_data.gyro]
 
                 # Time since opening of GUI program
+                base_time = self.start_time  # Single data point (device one)
                 first_delta_time = cur_time - base_time
                 sec_delta_time = cur_time_2 - base_time
-
-                #
-                # If the second device is lagging, let the second device catch up
-                #       ---> By finding a more recent second device data point
-                #
-                if first_delta_time - sec_delta_time > COPY_THRESHOLD:
-                    while first_delta_time - sec_delta_time > COPY_THRESHOLD:
-                        second_offset += 1
-                        if second_offset >= len(sec_myo_data):
-                            break
-
-                        cur_sec_data = sec_myo_data[second_offset]
-                        cur_time_2 = cur_sec_data[0]
-                        sec_delta_time = cur_time_2 - base_time
-
-                if second_offset >= len(sec_myo_data):
-                    break
-                else:
-                    cur_sec_data = sec_myo_data[second_offset]  # Update single data point
-                    cur_time_2 = cur_sec_data[0]
-                    emg_list_2 = cur_sec_data[2]
-                    orient_list_2 = cur_sec_data[3]
-                    accel_list_2 = cur_sec_data[4]
-                    gyro_list_2 = cur_sec_data[5]
-                    sec_delta_time = cur_time_2 - base_time
-
-                #
-                # If second data is ahead, let the first device catch up
-                #       ---> By finding a more recent first device data point
-                #
-                if sec_delta_time - first_delta_time > COPY_THRESHOLD:
-                    continue
 
                 # Write to file descriptor
                 fd_all.write("{:.4f},{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
@@ -534,7 +667,6 @@ class DataTools(QWidget):
                     gyro_list_2[0], gyro_list_2[1], gyro_list_2[2]
                 )
                 )
-                second_offset += 1
 
             fd_1.close()
             fd_2.close()
@@ -551,20 +683,20 @@ class DataTools(QWidget):
 
             # Select data from valid device
             data_ref = None
-            if len(self.first_myo_data) == 0:
-                data_ref = copy.deepcopy(self.second_myo_data)
+            if len(self.data_collected.band_1.timestamps) == 0:
+                data_ref = copy.deepcopy(self.data_collected.band_2)
             else:
-                data_ref = copy.deepcopy(self.first_myo_data)
+                data_ref = copy.deepcopy(self.data_collected.band_1)
 
             # Create file, write header
             fd = open(full_path, "w")
             fd.write(
-                "Time, Index, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
+                "Time, Label, EMG_1, EMG_2, EMG_3, EMG_4, EMG_5, EMG_6, EMG_7, EMG_8, OR_W, OR_X, OR_Y, OR_Z,"
                 "ACC_1, ACC_2, ACC_3, GYRO_1, GYRO_2, GYRO_3\n")
 
             # Save data points
-            for data in data_ref:
-                write_single(data, fd)
+            for idx in range(len(data_ref.timestamps)):
+                write_single(self, data_ref, idx, fd)
             fd.close()
 
             self.update = QMessageBox()
@@ -714,9 +846,9 @@ class DataTools(QWidget):
             # Holds relevant information about Myo found, and reacts to user actions
             #
             widget = MyoFoundWidget(port, device, self.connection_made, self.connection_dropped,
-                                        self.get_current_label, partial(self.battery_update,
+                                    self.get_current_label, partial(self.battery_update,
                                                                     device_address=device["sender_address"]),
-                                        self.data_tab_signals, self.is_data_tools_open
+                                    self.data_tab_signals, self.is_data_tools_open
                                     )
 
             # Add to list of Myo dongles and devices found
@@ -818,8 +950,8 @@ class DataTools(QWidget):
             self.first_port = port
             self.top_tab.addTab(self.myo_1_tab, "Myo Device 1")
 
-            return (
-                self.top_tab.currentIndex, None, self.myo_1_tab.currentIndex, self.myo_1_charts, self.first_myo_data)
+            return (self.top_tab.currentIndex,
+                    None, self.myo_1_tab.currentIndex, self.myo_1_charts, self.data_collected.band_1)
 
         else:
             if self.second_myo != None:
@@ -835,7 +967,7 @@ class DataTools(QWidget):
                 self.top_tab.addTab(self.myo_2_tab, "Myo Device 2")
 
                 return (self.top_tab.currentIndex, self.first_myo, self.myo_2_tab.currentIndex, self.myo_2_charts,
-                        self.second_myo_data)
+                        self.data_collected.band_2)
 
     def warn_user(self, message):
         """
@@ -864,7 +996,7 @@ class MyoFoundWidget(QWidget):
     """
 
     def __init__(self, port, myo_device, connect_notify, disconnect_notify, get_current_label, battery_notify,
-                    data_tab_signals, is_data_tools_open):
+                 data_tab_signals, is_data_tools_open):
         """
 
         :param port: The port used to find this device.
@@ -998,7 +1130,7 @@ class MyoFoundWidget(QWidget):
         self.prev_tab = connection_contents[1]
         self.tab_open = connection_contents[2]
         self.chart_list = connection_contents[3]
-        self.data_list = connection_contents[4]
+        self.data_collected = connection_contents[4]
 
         #
         # Begin the process of connecting and collecting data
@@ -1011,7 +1143,8 @@ class MyoFoundWidget(QWidget):
 
             # Create background worker
             self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
-                                        self.on_axes_update, self.on_new_data, self.data_list, self.on_worker_started,
+                                        self.on_axes_update, self.on_new_data, self.data_collected,
+                                        self.on_worker_started,
                                         self.on_worker_stopped, self.connect_failed, self.on_discon_occurred,
                                         self.battery_notify, self.create_event, self.get_current_label,
                                         self.data_tab_signals, self.is_data_tools_open)
@@ -1085,11 +1218,11 @@ class MyoFoundWidget(QWidget):
         self.enable_box.setCheckState(Qt.Unchecked)
 
         # Trim potentially useless data
-        num_samples = len(self.data_list)
+        num_samples = len(self.data_collected.timestamps)
         if self.num_trim_samples >= num_samples:
-            self.data_list = []
+            self.data_collected.clear()
         else:
-            self.data_list = self.data_list[:num_samples - self.num_trim_samples]
+            self.data_collected.trim(self.num_trim_samples)
 
         self.warning = QErrorMessage()
         self.warning.showMessage("Myo armband device disconnected unexpectedly.")
@@ -1122,11 +1255,11 @@ class MyoFoundWidget(QWidget):
         self.enable_box.setCheckState(Qt.Unchecked)
 
         # Trim potentially useless data
-        num_samples = len(self.data_list)
+        num_samples = len(self.data_collected.timestamps)
         if self.num_trim_samples >= num_samples:
-            self.data_list = []
+            self.data_collected.clear()
         else:
-            self.data_list = self.data_list[:num_samples - self.num_trim_samples]
+            self.data_collected.trim(self.num_trim_samples)
 
         # Old backend:
         #
@@ -1218,7 +1351,7 @@ class GroundTruthHelper(QMainWindow):
         #       2: Minimum video number in specified path
         #       3. Maximum video number in specified path
         #
-        self.video_dir = "../gesture_videos"
+        self.video_dir = "gesture_videos"
         self.video_path_template = [
             ("arrows/exercise_a/a{}.mp4", 12),
             ("arrows/exercise_b/b{}.mp4", 17),
@@ -1262,8 +1395,8 @@ class GroundTruthHelper(QMainWindow):
         # Video box
         #
         self.setWindowTitle("Ground Truth Helper")
-        self.video_player   = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        video_widget        = QVideoWidget()
+        self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        video_widget = QVideoWidget()
 
         #
         # Description Box
@@ -1698,7 +1831,7 @@ class MyoDataWorker(QRunnable):
             5) Optionally, disconnects on a second press, halting the receipt of data
     """
 
-    def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_list,
+    def __init__(self, port, myo_device, series_list, indices_list, axes_callback, data_call_back, data_collected,
                  on_worker_started, on_worker_stopped, on_connect_failed, on_discon_occurred, battery_notify,
                  create_event, get_current_label, data_tab_signals, is_data_tools_open):
         """
@@ -1708,7 +1841,7 @@ class MyoDataWorker(QRunnable):
         :param indices_list: A list of sample indices, corresponding to the charts.
         :param axes_callback: Called when chart axes need an update.
         :param data_call_back: A function called on receipt of EMG data.
-        :param data_list: A list of all data collected from this device.
+        :param data_collected: A MyoData object containing all data collected for a single device.
         :param on_worker_started: A function called when this background worker starts.
         :param on_worker_stopped: A function called when this background worker exits run().
         :param on_connect_failed: A function called when this background worker fails to connect to a Myo device.
@@ -1722,7 +1855,7 @@ class MyoDataWorker(QRunnable):
         self.myo_device = myo_device
         self.series_list = series_list
         self.indices_list = indices_list
-        self.data_list = data_list
+        self.data_collected = data_collected
         self.update = DataWorkerUpdate()
         self.create_event = create_event
         self.get_current_label = get_current_label
@@ -1742,16 +1875,10 @@ class MyoDataWorker(QRunnable):
         self.scan_period = 0.2  # seconds
         self.update_period = 4
         self.emg_sample_rate = 200  # 200 hz
-
-        # States
-        self.running = False
-        self.samples_count = 0
-        self.complete = False
-
-        # Timestamp states
-        self.reset_period = 200
-        self.cur_sample = 0
-        self.base_time = None
+        self.sync_tolerance = 15 / 1000
+        self.pos_eps = 2.5 / 1000
+        self.max_skips = 200
+        self.reset_period = 400
 
     def run(self):
         # State setup
@@ -1759,6 +1886,14 @@ class MyoDataWorker(QRunnable):
         self.running = True
         self.complete = False
         self.update.workerStarted.emit()
+
+        # States for timestamp synchronization
+        self.reset_needed = False
+        self.reset_skips = 0
+        self.time_received = None
+        self.base_time = None
+        self.cur_sample = 0
+        self.samples_count = 0
 
         # Connect
         self.dongle.clear_state()
@@ -1807,16 +1942,37 @@ class MyoDataWorker(QRunnable):
 
         if self.running:
 
-            if self.cur_sample % self.reset_period == 0:
-                self.base_time = time.time()
-                self.cur_sample = 0
+            cur_time = time.time()
+            if self.time_received is None:
+                self.time_received = cur_time
+                self.base_time = cur_time
 
-            time_received = self.base_time + self.cur_sample * (1 / self.emg_sample_rate)
+            if self.cur_sample % self.reset_period == 0:
+                self.reset_needed = True
+
+            if self.reset_needed:
+
+                if (cur_time - self.time_received >= self.pos_eps) and (
+                        cur_time - self.time_received < self.sync_tolerance):
+                    self.reset_skips = 0
+                    self.base_time = cur_time
+                    self.cur_sample = 0
+                    self.reset_needed = False
+                else:
+                    self.reset_skips += 1
+
+                if (self.reset_skips >= self.max_skips) and (cur_time - self.time_received >= self.pos_eps):
+                    self.reset_skips = 0
+                    self.base_time = cur_time
+                    self.cur_sample = 0
+                    self.reset_needed = False
+
+            self.time_received = self.base_time + self.cur_sample * (1 / self.emg_sample_rate)
             self.cur_sample += 1
 
             # Is this tab corresponding to this worker open
-            create_events   = self.create_event()
-            create_events  &= self.is_data_tools_open()
+            create_events = self.create_event()
+            create_events &= self.is_data_tools_open()
 
             # Request an axes update for the charts
             if (self.samples_count != 0) and (self.samples_count % NUM_GUI_SAMPLES == 0):
@@ -1839,34 +1995,14 @@ class MyoDataWorker(QRunnable):
                 if self.samples_count % self.update_period == 0:
                     self.update.dataUpdate.emit()
 
-            # Accelerometer values are multipled by the following constant (and are in units of g)
-            MYOHW_ACCELEROMETER_SCALE = 2048.0
-
-            # Gyroscope values are multipled by the following constant (and are in units of deg/s)
-            MYOHW_GYROSCOPE_SCALE = 16.0
-
-            # Orientation values are multipled by the following constant (units of a unit quaternion)
-            MYOHW_ORIENTATION_SCALE = 16384.0
-
             #
             # Update list of all data collected (with correct rescaling)
             #
             current_label = self.get_current_label()  # Grabbed from GT Helper
 
-            self.data_list.append((time_received, self.samples_count, emg_list,
-                                   [orient_w / MYOHW_ORIENTATION_SCALE, orient_x / MYOHW_ORIENTATION_SCALE,
-                                    orient_y / MYOHW_ORIENTATION_SCALE, orient_z / MYOHW_ORIENTATION_SCALE],
-                                   [accel_1 / MYOHW_ACCELEROMETER_SCALE, accel_2 / MYOHW_ACCELEROMETER_SCALE,
-                                    accel_3 / MYOHW_ACCELEROMETER_SCALE],
-                                   [gyro_1 / MYOHW_GYROSCOPE_SCALE, gyro_2 / MYOHW_GYROSCOPE_SCALE,
-                                    gyro_3 / MYOHW_GYROSCOPE_SCALE],
-                                   current_label))
+            self.data_collected.add_sample(self.time_received, current_label, emg_list, accel_1, accel_2, accel_3,
+                                           gyro_1, gyro_2, gyro_3, orient_w, orient_x, orient_y, orient_z)
 
-            # Update list of all data collected (without scaling)
-            #
-            # self.data_list.append((time.time(), self.samples_count, emg_list, [orient_w, orient_x, orient_y, orient_z],
-            #                       [accel_1, accel_2, accel_3],
-            #                       [gyro_1, gyro_2, gyro_3]))
             self.samples_count += 1
 
 
@@ -2051,17 +2187,17 @@ class GroundTruthWorker(QRunnable):
                 #
                 self.current_rep = 0
                 QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, "{} s ({}/{})".format(self.preparation_period, self.current_rep,
-                                                                                self.num_reps)))
+                                         Q_ARG(str, "{} s ({}/{})".format(self.preparation_period, self.current_rep,
+                                                                          self.num_reps)))
                 QMetaObject.invokeMethod(self.cur_movement, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, "Exercise {} - Movement {} of {}".format(ex_label, movement_num + 1,
-                                                                                   len(video_paths))
-                                                )
+                                         Q_ARG(str, "Exercise {} - Movement {} of {}".format(ex_label, movement_num + 1,
+                                                                                             len(video_paths))
+                                               )
                                          )
 
                 current_description = MOVEMENT_DESC[ex_label][movement_num + 1]
                 QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, current_description[0]))
+                                         Q_ARG(str, current_description[0]))
                 QMetaObject.invokeMethod(self.desc_explain, "setText",
                                          Qt.QueuedConnection, Q_ARG(str, current_description[1]))
 
@@ -2069,7 +2205,7 @@ class GroundTruthWorker(QRunnable):
                 # Preparation period
                 #
                 QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "Preparing for repetition 1..." ))
+                                         Q_ARG(str, "Preparing for repetition 1..."))
                 QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
                                          Q_ARG(str, "font-weight: bold; font-size: 18pt; color: blue;"))
                 self.play_video(video_path, self.preparation_period)
@@ -2104,7 +2240,8 @@ class GroundTruthWorker(QRunnable):
                     # Rest
                     if self.current_rep != self.num_reps:
                         QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                                    Q_ARG(str, "Resting before repetition {}...".format(self.current_rep + 1)))
+                                                 Q_ARG(str,
+                                                       "Resting before repetition {}...".format(self.current_rep + 1)))
                         QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
                                                  Q_ARG(str, "font-weight: bold; font-size: 18pt; color: orange;"))
                         self.play_video(video_path, self.rest_duration)
@@ -2158,7 +2295,7 @@ class GroundTruthWorker(QRunnable):
 
         QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
                                  Q_ARG(str, "{}s ({} / {})".format("{0:.1f}".format(self.state_time_remain),
-                                                           self.current_rep, self.num_reps)))
+                                                                   self.current_rep, self.num_reps)))
 
         if self.state_time_remain == 0:
             self.timer.stop()
