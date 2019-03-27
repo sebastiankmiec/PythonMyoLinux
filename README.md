@@ -12,7 +12,9 @@ This repository contains the following:
 ![image](https://drive.google.com/uc?export=view&id=1CFbHmwnm0IA9_GXoSFw-ZrEctcZWsA-7)
 
    2. GUI tabs 
+      1. Data Collection
 ![image](https://drive.google.com/uc?export=view&id=1lmxhSv5R_esBc0aPiKkVMWWlAkicxfSe)
+      2. Online Prediction
 ![image](https://drive.google.com/uc?export=view&id=1SX0WN0oRtQ3hPp98yJFuWO422Hr00Dp4)
 
 The GUI demonstration currently supports up to two Myo armband devices over a BLED112 Bluetooth dongle(s), and is intended to be used on a Linux distribution. 
