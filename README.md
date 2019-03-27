@@ -1,4 +1,4 @@
-# PythonMyoLinux
+# PythonMyoLinux (In Progress)
 This repository contains the following:
 1. A Python (3.5) package to collect sEMG and IMU measurements from Myo armband devices, featuring:
    1. An implementation of the Bluegiga API (BGAPI)
@@ -8,8 +8,12 @@ This repository contains the following:
    3. Use of Myo specific commands
   
 2. A GUI demonstration.
+   1. Overall system
+![image](https://drive.google.com/uc?export=view&id=1CFbHmwnm0IA9_GXoSFw-ZrEctcZWsA-7)
 
-![image](https://drive.google.com/uc?export=view&id=1rA8t-CWVHgHkZyn_GkJr88QalsvWlECa)
+   2. GUI tabs 
+![image](https://drive.google.com/uc?export=view&id=1lmxhSv5R_esBc0aPiKkVMWWlAkicxfSe)
+![image](https://drive.google.com/uc?export=view&id=1SX0WN0oRtQ3hPp98yJFuWO422Hr00Dp4)
 
 The GUI demonstration currently supports up to two Myo armband devices over a BLED112 Bluetooth dongle(s), and is intended to be used on a Linux distribution. 
 
