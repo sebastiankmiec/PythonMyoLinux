@@ -55,15 +55,26 @@ class DataTools(QWidget):
     """
 
     class MyoData:
+        """
+            Stores all data collected from two Myo armband devices.
+        """
 
         class ArmbandData:
+            """
+                Stores all data for a SINGLE Myo armband device.
+            """
             emg_ch          = 8
             accel_ch        = 3
             orient_ch       = 4
             gyro_ch         = 3
-            add_data_lock   = QMutex()
+            add_data_lock   = QMutex() # Access from multiple data workers
 
             def __init__(self, sync_data, is_master):
+                """
+                :param sync_data: A function that is called to synchronize data with other ArmbandData objects.
+                :param is_master: True/False -> True: All data will be synchronized with respect to this armband's
+                                                            timestamps.
+                """
                 self.sync_data  = sync_data
                 self.is_master  = is_master
                 self.timestamps = []
@@ -82,7 +93,12 @@ class DataTools(QWidget):
                 self.orient = [[] for x in range(self.orient_ch)]
 
             def trim(self, trim_samples):
-                n = len(self.timestamps)
+                """
+                    Remove the last "trim_samples" for all data types.
+
+                :param trim_samples: Number of samples to trim
+                """
+                n               = len(self.timestamps)
                 self.timestamps = self.timestamps[:n - trim_samples]
                 self.labels     = self.labels[:n - trim_samples]
                 self.emg        = [x[:n - trim_samples] for x in self.emg]
@@ -92,6 +108,17 @@ class DataTools(QWidget):
 
             def add_sample(self, time_received, current_label, emg_list, accel_1, accel_2, accel_3, gyro_1, gyro_2,
                            gyro_3, orient_w, orient_x, orient_y, orient_z):
+                """
+
+                    Acquire a lock, add a new data sample and update synchronization mapping in "MyoData" object
+
+                :param time_received: Data packet timestamp
+                :param current_label: Ground truth label (0-52)
+                :param emg_list: A list of 8 channel emg data
+                :param accel_1/2/3: Accelerometer data
+                :param gyro_1/2/3: Gyroscope data
+                :param orient_w/x/y/z: Magnetometer data
+                """
 
                 self.add_data_lock.lock()
 
@@ -120,8 +147,8 @@ class DataTools(QWidget):
 
 
         def __init__(self):
-            self.band_1 = self.ArmbandData(self.synchronize_data, True)
-            self.band_2 = self.ArmbandData(self.synchronize_data, False)
+            self.band_1 = self.ArmbandData(sync_data=self.synchronize_data, is_master=True)
+            self.band_2 = self.ArmbandData(sync_data=self.synchronize_data, is_master=False)
 
             # Synchronization states (update mapping)
             self.first_timestamp    = None
@@ -134,6 +161,12 @@ class DataTools(QWidget):
             self.data_mapping   = []
 
         def synchronize_data(self, is_master):
+            """
+                Update mapping of first armband's data to second armband's data
+
+            :param is_master: Is this ArmbandData object the master? -> Data will be synchronized with respect to this
+                                armband's timestamps.
+            """
 
             if is_master:
                 self.data_mapping.append(self.invalid_map)
@@ -156,15 +189,15 @@ class DataTools(QWidget):
                 #   Note: Timestamps from both devices are enforced to be strictly increasing (elsewhere)
                 #
                 if self.first_sync:
-                    self.first_sync = False
-                    first_timestamp = self.band_1.timestamps[self.first_offset]
-                    sec_timestamp = self.band_2.timestamps[self.second_offset]
-                    min_distance = abs(first_timestamp - sec_timestamp)
+                    self.first_sync     = False
+                    first_timestamp     = self.band_1.timestamps[self.first_offset]
+                    sec_timestamp       = self.band_2.timestamps[self.second_offset]
+                    min_distance        = abs(first_timestamp - sec_timestamp)
 
                     while self.first_offset > 0:
-                        temp_idx = self.first_offset - 1
-                        temp_timestamp = self.band_1.timestamps[temp_idx]
-                        new_distance = abs(temp_timestamp - sec_timestamp)
+                        temp_idx        = self.first_offset - 1
+                        temp_timestamp  = self.band_1.timestamps[temp_idx]
+                        new_distance    = abs(temp_timestamp - sec_timestamp)
 
                         if new_distance > min_distance:
                             break
@@ -183,12 +216,12 @@ class DataTools(QWidget):
                             (self.second_offset + 1 >= len(self.band_2.timestamps) - 1)):
                         return
 
-                    self.first_offset += 1
+                    self.first_offset  += 1
                     self.second_offset += 1
-                    first_timestamp = self.band_1.timestamps[self.first_offset]
-                    sec_timestamp = self.band_2.timestamps[self.second_offset]
-                    min_distance = first_timestamp - sec_timestamp
-                    in_sync = False
+                    first_timestamp     = self.band_1.timestamps[self.first_offset]
+                    sec_timestamp       = self.band_2.timestamps[self.second_offset]
+                    min_distance        = first_timestamp - sec_timestamp
+                    in_sync             = False
 
                     if abs(min_distance) < COPY_THRESHOLD:
                         in_sync = True
@@ -196,14 +229,14 @@ class DataTools(QWidget):
 
                         if min_distance > 0:
                             while self.second_offset < len(self.band_2.timestamps) - 1:
-                                temp_timestamp = self.band_2.timestamps[self.second_offset]
-                                temp_distance = first_timestamp - temp_timestamp
+                                temp_timestamp  = self.band_2.timestamps[self.second_offset]
+                                temp_distance   = first_timestamp - temp_timestamp
 
                                 if abs(temp_distance) > abs(min_distance):
                                     break
                                 else:
                                     self.second_offset += 1
-                                    min_distance = temp_distance
+                                    min_distance        = temp_distance
 
                             if abs(min_distance) < COPY_THRESHOLD:
                                 in_sync = True
@@ -211,37 +244,43 @@ class DataTools(QWidget):
                         # min_distance <= (-1) * COPY_THRESHOLD
                         else:
                             while self.first_offset < len(self.band_1.timestamps) - 1:
-                                temp_timestamp = self.band_1.timestamps[self.first_offset]
-                                temp_distance = temp_timestamp - sec_timestamp
+                                temp_timestamp  = self.band_1.timestamps[self.first_offset]
+                                temp_distance   = temp_timestamp - sec_timestamp
 
                                 if abs(temp_distance) > abs(min_distance):
                                     break
                                 else:
-                                    self.first_offset += 1
-                                    min_distance = temp_distance
+                                    self.first_offset  += 1
+                                    min_distance        = temp_distance
 
                             if abs(min_distance) < COPY_THRESHOLD:
                                 in_sync = True
 
-                    # Data from two devices is (now) synchronized
+                    # Data from two devices is (now) in sync
                     if in_sync:
                         self.data_mapping[self.first_offset] = self.second_offset
 
     def __init__(self, on_device_connected, on_device_disconnected, is_data_tools_open):
+        """
+        :param on_device_connected: This function is called on a user initiated connection
+        :param on_device_disconnected: This function is called on an unexpected or user initiated disconnect
+        :param is_data_tools_open: Is the DataTools tab open
+        """
         super().__init__()
 
-        self.myo_devices = []
-        self.first_myo = None  # Currently connected myo devices, and associated ports
-        self.first_port = None
-        self.second_myo = None
-        self.second_port = None
+        self.myo_devices        = []
+        self.first_myo          = None  # Currently connected myo devices, and associated ports
+        self.first_port         = None
+        self.second_myo         = None
+        self.second_port        = None
         self.is_data_tools_open = is_data_tools_open
 
-        self.data_collected = self.MyoData()
+        # Holds all collected data
+        self.data_collected     = self.MyoData()
 
-        self.progress_bars = []  # Progress bars, used when searching for Myo armband devies
+        self.progress_bars  = []  # Progress bars, used when searching for Myo armband devies
         self.search_threads = []  # Background threads that scan for advertising packets from advertising
-        self.myo_counts = []  # The number of Myo devices found, via a given communication port
+        self.myo_counts     = []  # The number of Myo devices found, via a given communication port
 
         # Emitted signals
         self.data_tab_signals = DataTabUpdate()
@@ -249,14 +288,14 @@ class DataTools(QWidget):
         self.data_tab_signals.disconnectUpdate.connect(on_device_disconnected)
 
         # States
-        self.ports_searching = {}
-        self.gt_helper_open = False  # Ground truth helper
+        self.ports_searching    = {}
+        self.gt_helper_open     = False  # Ground truth helper
+        self.start_time         = time.time()
+        self.data_directory     = None
 
-        # Configurable
-        self.start_time = time.time()
-        self.data_directory = None
-        self.increments = 100  # Number of progress bar increments (when searching for Myo devices)
-        self.worker_check_period = 1  # seconds
+        # Configurable parameters
+        self.increments             = 100  # Number of progress bar increments (when searching for Myo devices)
+        self.worker_check_period    = 1  # seconds
 
         self.init_ui()
 
@@ -436,8 +475,8 @@ class DataTools(QWidget):
             waiting_on_search = False
             for worker in self.search_threads:
                 if not worker.complete:
-                    worker.running = False
-                    waiting_on_search = True
+                    worker.running      = False
+                    waiting_on_search   = True
                     break
 
             if waiting_on_search:
@@ -449,8 +488,8 @@ class DataTools(QWidget):
         waiting_on_search = True
         while waiting_on_search:
 
-            waiting_on_search = False
-            num_widgets = self.ports_found.count()
+            waiting_on_search   = False
+            num_widgets         = self.ports_found.count()
 
             for idx in range(num_widgets):
 
@@ -463,8 +502,8 @@ class DataTools(QWidget):
 
                 if not (myo_widget.worker is None):
                     if not myo_widget.worker.complete:
-                        myo_widget.worker.running = False
-                        waiting_on_search = True
+                        myo_widget.worker.running   = False
+                        waiting_on_search           = True
                         break
 
             if waiting_on_search:
@@ -494,13 +533,15 @@ class DataTools(QWidget):
             return -1
 
     def gt_helper_closed(self):
+        """
+            Called when GT Helper window is closed
+        """
         self.gt_helper_open = False
 
     def file_browser_clicked(self):
         """
             File explorer button clicked.
         """
-
         dialog = QFileDialog()
         dialog.setFileMode(QFileDialog.Directory)
         dialog.setOption(QFileDialog.ShowDirsOnly)
@@ -511,7 +552,7 @@ class DataTools(QWidget):
 
     def save_clicked(self):
         """
-            Save button clicked.
+            Save button clicked, save all data to selected directory.
         """
 
         if (((self.data_directory is None) or (not exists(self.data_directory))) and
@@ -531,13 +572,13 @@ class DataTools(QWidget):
         def write_single(self, armband_data, index, fd):
 
             # See "create_emg_event" for details:
-            base_time = self.start_time
-            cur_time = armband_data.timestamps[index]
-            emg_list = [x[index] for x in armband_data.emg]
+            base_time   = self.start_time
+            cur_time    = armband_data.timestamps[index]
+            emg_list    = [x[index] for x in armband_data.emg]
             orient_list = [x[index] for x in armband_data.orient]
-            accel_list = [x[index] for x in armband_data.accel]
-            gyro_list = [x[index] for x in armband_data.gyro]
-            label = armband_data.labels[index]
+            accel_list  = [x[index] for x in armband_data.accel]
+            gyro_list   = [x[index] for x in armband_data.gyro]
+            label       = armband_data.labels[index]
 
             # Write to file descriptor
             fd.write("{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
@@ -556,21 +597,18 @@ class DataTools(QWidget):
         # Multiple myo devices to save data from
         elif (len(self.data_collected.band_1.timestamps) != 0) and (len(self.data_collected.band_2.timestamps) != 0):
 
-            full_path_1 = join(self.data_directory, FILENAME_1)
-            full_path_2 = join(self.data_directory, FILENAME_2)
-            full_path_all = join(self.data_directory, FILENAME_all)
+            full_path_1     = join(self.data_directory, FILENAME_1)
+            full_path_2     = join(self.data_directory, FILENAME_2)
+            full_path_all   = join(self.data_directory, FILENAME_all)
 
-            #first_myo_data  = copy.deepcopy(self.data_collected.band_1)
-            #sec_myo_data    = copy.deepcopy(self.data_collected.band_2)
-            #data_mapping    = copy.deepcopy(self.data_collected.data_mapping)
             first_myo_data  = self.data_collected.band_1
             sec_myo_data    = self.data_collected.band_2
             data_mapping    = self.data_collected.data_mapping
 
             # File descriptors for 3 created files
-            fd_1 = open(full_path_1, "w")
-            fd_2 = open(full_path_2, "w")
-            fd_all = open(full_path_all, "w")
+            fd_1    = open(full_path_1, "w")
+            fd_2    = open(full_path_2, "w")
+            fd_all  = open(full_path_all, "w")
 
             # Headers
             fd_1.write(
@@ -612,15 +650,13 @@ class DataTools(QWidget):
             #
             # Save data to individual files, and find start indices
             #
-            min_first_dist = float("inf")
-            min_sec_dist = float("inf")
-            first_idx = None
-            sec_idx = None
+            min_first_dist  = float("inf")
+            first_idx       = None
 
             for i, time in enumerate(first_myo_data.timestamps):
                 if abs(start_time - time) < min_first_dist:
-                    min_first_dist = abs(start_time - time)
-                    first_idx = i
+                    min_first_dist  = abs(start_time - time)
+                    first_idx       = i
                 write_single(self, first_myo_data, i, fd_1)
             for i, time in enumerate(sec_myo_data.timestamps):
                 write_single(self, sec_myo_data, i, fd_2)
@@ -640,24 +676,24 @@ class DataTools(QWidget):
                 #
                 # See "create_emg_event" for details:
                 #
-                cur_time = first_myo_data.timestamps[first_offset]
-                emg_list = [x[first_offset] for x in first_myo_data.emg]
+                cur_time    = first_myo_data.timestamps[first_offset]
+                emg_list    = [x[first_offset] for x in first_myo_data.emg]
                 orient_list = [x[first_offset] for x in first_myo_data.orient]
-                accel_list = [x[first_offset] for x in first_myo_data.accel]
-                gyro_list = [x[first_offset] for x in first_myo_data.gyro]
-                label_one = first_myo_data.labels[first_offset]  # Label, as per device one (not device two)
+                accel_list  = [x[first_offset] for x in first_myo_data.accel]
+                gyro_list   = [x[first_offset] for x in first_myo_data.gyro]
+                label_one   = first_myo_data.labels[first_offset]  # Label, as per device one (not device two)
 
                 # Second device sample
-                cur_time_2 = sec_myo_data.timestamps[second_offset]
-                emg_list_2 = [x[second_offset] for x in sec_myo_data.emg]
-                orient_list_2 = [x[second_offset] for x in sec_myo_data.orient]
-                accel_list_2 = [x[second_offset] for x in sec_myo_data.accel]
-                gyro_list_2 = [x[second_offset] for x in sec_myo_data.gyro]
+                cur_time_2      = sec_myo_data.timestamps[second_offset]
+                emg_list_2      = [x[second_offset] for x in sec_myo_data.emg]
+                orient_list_2   = [x[second_offset] for x in sec_myo_data.orient]
+                accel_list_2    = [x[second_offset] for x in sec_myo_data.accel]
+                gyro_list_2     = [x[second_offset] for x in sec_myo_data.gyro]
 
                 # Time since opening of GUI program
-                base_time = self.start_time  # Single data point (device one)
-                first_delta_time = cur_time - base_time
-                sec_delta_time = cur_time_2 - base_time
+                base_time           = self.start_time  # Single data point (device one)
+                first_delta_time    = cur_time - base_time
+                sec_delta_time      = cur_time_2 - base_time
 
                 # Write to file descriptor
                 fd_all.write("{:.4f},{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
@@ -714,6 +750,9 @@ class DataTools(QWidget):
             self.update.show()
 
     def gt_helper_clicked(self):
+        """
+            GT Helper button clicked
+        """
         if not self.gt_helper_open:
             self.gt_helper_open = True
             self.gt_helper.show()
@@ -740,12 +779,11 @@ class DataTools(QWidget):
         self.ports_found.clear()
         self.progress_bars.clear()
 
-        expec_manufac = "Bluegiga"
-        expec_name = "Low Energy Dongle"
+        expec_manufac   = "Bluegiga"
+        expec_name      = "Low Energy Dongle"
+        ports_found     = 0
 
-        ports_found = 0
         for port in comports():
-
             #
             # If this is a Bluegiga - Low Energy Dongle
             #
@@ -765,7 +803,6 @@ class DataTools(QWidget):
 
             # Styling
             port_list_entry = QListWidgetItem(port_attr["device"])
-
             port_list_entry.setIcon(QIcon(join(abspath(__file__).replace("data_tools.py", ""), "icons/sp.png")))
             port_list_entry.port_idx = ports_found
             port_list_entry.port = port_attr["device"]
@@ -781,7 +818,7 @@ class DataTools(QWidget):
 
         try:
             index = e.port_idx  # Port number
-            port = e.port  # /dev/ttyXYZ
+            port = e.port       # /dev/ttyXYZ
         except:
             return
 
@@ -817,9 +854,9 @@ class DataTools(QWidget):
         #
         # Create background thread to search for Myo devices
         #
-        self.myo_counts[index] = 0
-        self.ports_searching[port] = True
-        worker = MyoSearchWorker(port, progress, partial(self.devices_found,
+        self.myo_counts[index]      = 0
+        self.ports_searching[port]  = True
+        worker                      = MyoSearchWorker(port, progress, partial(self.devices_found,
                                                          thread_idx=len(self.search_threads),
                                                          port=port,
                                                          myo_count_index=index), self.increments)
@@ -856,9 +893,9 @@ class DataTools(QWidget):
             # Holds relevant information about Myo found, and reacts to user actions
             #
             widget = MyoFoundWidget(port, device, self.connection_made, self.connection_dropped,
-                                    self.get_current_label, partial(self.battery_update,
-                                                                    device_address=device["sender_address"]),
-                                    self.data_tab_signals, self.is_data_tools_open
+                                            self.get_current_label, partial(self.battery_update,
+                                                                            device_address=device["sender_address"]),
+                                            self.data_tab_signals, self.is_data_tools_open
                                     )
 
             # Add to list of Myo dongles and devices found
@@ -898,8 +935,8 @@ class DataTools(QWidget):
         if self.first_myo is None:
 
             if (self.second_myo != None) and (self.second_myo == address):
-                self.second_myo = None
-                self.second_port = None
+                self.second_myo     = None
+                self.second_port    = None
                 self.top_tab.removeTab(0)
 
                 # Old backend:
@@ -910,7 +947,7 @@ class DataTools(QWidget):
 
         else:
             if self.first_myo == address:
-                self.first_myo = None
+                self.first_myo  = None
                 self.first_port = None
                 self.top_tab.removeTab(0)
 
@@ -920,7 +957,7 @@ class DataTools(QWidget):
 
             elif self.second_myo != None:
                 if (self.second_myo != None) and (self.second_myo == address):
-                    self.second_myo = None
+                    self.second_myo  = None
                     self.second_port = None
                     self.top_tab.removeTab(1)
 
@@ -994,7 +1031,7 @@ class DataTools(QWidget):
 ########################################################################################################################
 ########################################################################################################################
 #
-# (DataTools) Widgets Used
+# (DataTools tab) Widgets Used
 #
 ########################################################################################################################
 ########################################################################################################################
@@ -1015,48 +1052,50 @@ class MyoFoundWidget(QWidget):
         :param disconnect_notify: A function called prior to disconnect attempts.
         :param get_current_label: A function that returns the current ground truth label.
         :param battery_notify: A function called on battery update evenets.
+        :param data_tab_signals: A DataTabUpdate object, allowing one to emit disconnect/connect signals
+        :param is_data_tools_open: Is the DataTools tab open?
         """
         super().__init__()
 
-        self.myo_device = myo_device
-        self.chart_list = None
-        self.tab_open = None
-        self.port = port
-        self.connect_notify = connect_notify
-        self.disconnect_notify = disconnect_notify
-        self.get_current_label = get_current_label
-        self.battery_notify = battery_notify
-        self.data_tab_signals = data_tab_signals
+        self.myo_device         = myo_device
+        self.chart_list         = None
+        self.tab_open           = None
+        self.port               = port
+        self.connect_notify     = connect_notify
+        self.disconnect_notify  = disconnect_notify
+        self.get_current_label  = get_current_label
+        self.battery_notify     = battery_notify
+        self.data_tab_signals   = data_tab_signals
         self.is_data_tools_open = is_data_tools_open
 
         # States
-        self.connected = False
-        self.worker = None
+        self.connected  = False
+        self.worker     = None
 
         # Configurable parameters
         self.num_trim_samples = 400  # On unexpected disconnect, or user-initiated disconnect, trim this many samples
-        #       from the list of all collected data thus far.
-        self.init_UI()
+                                     #       from the list of all collected data thus far.
+        self.init_ui()
 
-    def init_UI(self):
+    def init_ui(self):
 
         # Layout
-        topLayout = QVBoxLayout()
-        infoLayout = QHBoxLayout()
+        topLayout   = QVBoxLayout()
+        infoLayout  = QHBoxLayout()
         infoLayout.setSpacing(5)
 
         # Myo armband icon
-        lbl = QLabel(self)
-        orig = QPixmap(join(abspath(__file__).replace("data_tools.py", ""), "icons/myo.png"))
-        new = orig.scaled(QSize(45, 45), Qt.KeepAspectRatio)
+        lbl     = QLabel(self)
+        orig    = QPixmap(join(abspath(__file__).replace("data_tools.py", ""), "icons/myo.png"))
+        new     = orig.scaled(QSize(45, 45), Qt.KeepAspectRatio)
         lbl.setPixmap(new)
 
         #
         # Format the Myo hardware (MAC) into a readable form
         #
         infoLayout.addWidget(lbl)
-        formatted_address = ""
-        length = len(self.myo_device["sender_address"].hex())
+        formatted_address   = ""
+        length              = len(self.myo_device["sender_address"].hex())
 
         for i, ch in enumerate(self.myo_device["sender_address"].hex()):
             formatted_address += ch
@@ -1095,10 +1134,10 @@ class MyoFoundWidget(QWidget):
         #
         # Connect / Disconnect options
         #
-        enableLayout = QHBoxLayout()
-        self.enable_text = QLabel("Enable: ")
+        enableLayout        = QHBoxLayout()
+        self.enable_text    = QLabel("Enable: ")
         enableLayout.addWidget(self.enable_text)
-        self.enable_box = QCheckBox()
+        self.enable_box     = QCheckBox()
         self.enable_box.clicked.connect(self.connect_with_myo)
         enableLayout.addWidget(self.enable_box)
         enableLayout.setAlignment(Qt.AlignRight)
@@ -1136,10 +1175,10 @@ class MyoFoundWidget(QWidget):
             self.enable_box.setEnabled(True)
             return
 
-        self.top_tab_open = connection_contents[0]
-        self.prev_tab = connection_contents[1]
-        self.tab_open = connection_contents[2]
-        self.chart_list = connection_contents[3]
+        self.top_tab_open   = connection_contents[0]
+        self.prev_tab       = connection_contents[1]
+        self.tab_open       = connection_contents[2]
+        self.chart_list     = connection_contents[3]
         self.data_collected = connection_contents[4]
 
         #
@@ -1151,7 +1190,7 @@ class MyoFoundWidget(QWidget):
             self.data_indices = []
             self.plotted_data = [None for x in range(8)]
 
-            # Create background worker
+            # Create background worker to collect and push data
             self.worker = MyoDataWorker(self.port, self.myo_device, self.measurements_list, self.data_indices,
                                         self.on_axes_update, self.on_new_data, self.data_collected,
                                         self.on_worker_started,
@@ -1343,9 +1382,8 @@ class GroundTruthHelper(QMainWindow):
     def closeEvent(self, event):
         self.close_event.exitClicked.emit()
 
-    def __init__(self, parent=None, close_function=None):
+    def __init__(self, close_function=None):
         """
-        :param parent: Parent widget
         :param close_function: A function called upon user exit of the GroundTruthHelper window.
         """
         super().__init__()
@@ -1361,20 +1399,20 @@ class GroundTruthHelper(QMainWindow):
         #       2: Minimum video number in specified path
         #       3. Maximum video number in specified path
         #
-        self.video_dir = "gesture_videos"
-        self.video_path_template = [
-            ("arrows/exercise_a/a{}.mp4", 12),
-            ("arrows/exercise_b/b{}.mp4", 17),
-            ("arrows/exercise_c/c{}.mp4", 23)
-        ]
+        self.video_dir              = "gesture_videos"
+        self.video_path_template    = [
+                                        ("arrows/exercise_a/a{}.mp4", 12),
+                                        ("arrows/exercise_b/b{}.mp4", 17),
+                                        ("arrows/exercise_c/c{}.mp4", 23)
+                                    ]
 
         # States
-        self.playing = False
-        self.all_video_paths = None
-        self.worker = None
-        self.unpausing = False
-        self.pausing = False
-        self.shutdown = False
+        self.playing            = False
+        self.all_video_paths    = None
+        self.worker             = None
+        self.unpausing          = False
+        self.pausing            = False
+        self.shutdown           = False
 
         self.init_ui()
 
@@ -1405,8 +1443,8 @@ class GroundTruthHelper(QMainWindow):
         # Video box
         #
         self.setWindowTitle("Ground Truth Helper")
-        self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        video_widget = QVideoWidget()
+        self.video_player   = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        video_widget        = QVideoWidget()
 
         #
         # Description Box
@@ -1557,7 +1595,6 @@ class GroundTruthHelper(QMainWindow):
         :param state_play: [bool] Enable/disable play button.
         :param state_pause: [bool] Enable/disable pause button.
         :param state_stop: [bool] Enable/disable stop button.
-        :return:
         """
         self.play_button.setEnabled(state_play)
         self.pause_button.setEnabled(state_pause)
@@ -1741,14 +1778,14 @@ class GroundTruthHelper(QMainWindow):
                 > Where each bool determines if exercise A/B/C has all videos available.
         """
 
-        exercises_found = [True, True, True]
-        self.all_video_paths = [("A", []), ("B", []), ("C", [])]
+        exercises_found         = [True, True, True]
+        self.all_video_paths    = [("A", []), ("B", []), ("C", [])]
 
         def create_exercise_paths(self, ex_label):
-            ex_index = ord(ex_label) - ord('A')
-            found_videos = True
-            path_template = join(self.video_dir, self.video_path_template[ex_index][0])
-            max_idx = self.video_path_template[ex_index][1]
+            ex_index        = ord(ex_label) - ord('A')
+            found_videos    = True
+            path_template   = join(self.video_dir, self.video_path_template[ex_index][0])
+            max_idx         = self.video_path_template[ex_index][1]
             ex_path_created = []
 
             for i in range(1, max_idx + 1):
@@ -1801,7 +1838,6 @@ class GroundTruthHelper(QMainWindow):
 class MyoSearch(QObject):
     searchComplete = pyqtSignal()
 
-
 # Used by MyoDataWorker
 class DataWorkerUpdate(QObject):
     axesUpdate = pyqtSignal()
@@ -1812,13 +1848,13 @@ class DataWorkerUpdate(QObject):
     disconOccurred = pyqtSignal()
     batteryUpdate = pyqtSignal([int])
 
-
 # Used by GroundTruthWorker
 class GTWorkerUpdate(QObject):
     workerStarted = pyqtSignal()
     workerUnpaused = pyqtSignal()
     workerPaused = pyqtSignal()
     workerStopped = pyqtSignal()
+
 
 
 ########################################################################################################################
@@ -1859,17 +1895,19 @@ class MyoDataWorker(QRunnable):
         :param battery_notify: A function called on receipt of battery level update.
         :param create_event: A function that determines whether to push data updates, based on open tabs.
         :param get_current_label: A function that returns the current ground truth label being collected.
+        :param data_tab_signals: A DataTabUpdate object, allowing the emission of disconnect/connect signals.
+        :param is_data_tools_open: Is the DataTools tab open?
         """
         super().__init__()
-        self.port = port
-        self.myo_device = myo_device
-        self.series_list = series_list
-        self.indices_list = indices_list
-        self.data_collected = data_collected
-        self.update = DataWorkerUpdate()
-        self.create_event = create_event
-        self.get_current_label = get_current_label
-        self.data_tab_signals = data_tab_signals
+        self.port               = port
+        self.myo_device         = myo_device
+        self.series_list        = series_list
+        self.indices_list       = indices_list
+        self.data_collected     = data_collected
+        self.update             = DataWorkerUpdate()
+        self.create_event       = create_event
+        self.get_current_label  = get_current_label
+        self.data_tab_signals   = data_tab_signals
         self.is_data_tools_open = is_data_tools_open
 
         # Signals
@@ -1882,28 +1920,28 @@ class MyoDataWorker(QRunnable):
         self.update.batteryUpdate.connect(battery_notify)
 
         # Configurable parameters
-        self.scan_period = 0.2  # seconds
-        self.update_period = 4
-        self.emg_sample_rate = 200  # 200 hz
-        self.sync_tolerance = 15 / 1000
-        self.pos_eps = 1 / 1000
-        self.max_skips = 200
-        self.reset_period = 400
+        self.scan_period        = 0.2  # seconds
+        self.update_period      = 4
+        self.emg_sample_rate    = 200  # 200 hz
+        self.sync_tolerance     = 15 / 1000
+        self.pos_eps            = 1 / 1000
+        self.max_skips          = 200
+        self.reset_period       = 400
 
     def run(self):
         # State setup
-        self.dongle = MyoDongle(self.port)
-        self.running = True
-        self.complete = False
+        self.dongle     = MyoDongle(self.port)
+        self.running    = True
+        self.complete   = False
         self.update.workerStarted.emit()
 
         # States for timestamp synchronization
-        self.reset_needed = False
-        self.reset_skips = 0
-        self.time_received = None
-        self.base_time = None
-        self.cur_sample = 0
-        self.samples_count = 0
+        self.reset_needed   = False
+        self.reset_skips    = 0
+        self.time_received  = None
+        self.base_time      = None
+        self.cur_sample     = 0
+        self.samples_count  = 0
 
         # Connect
         self.dongle.clear_state()
@@ -1938,6 +1976,7 @@ class MyoDataWorker(QRunnable):
 
         self.complete = True
 
+
     def create_emg_event(self, emg_list, orient_w, orient_x, orient_y, orient_z,
                          accel_1, accel_2, accel_3, gyro_1, gyro_2, gyro_3, sample_num):
         """
@@ -1952,10 +1991,15 @@ class MyoDataWorker(QRunnable):
 
         if self.running:
 
+            #########################################################################################################
+            #
+            # Timestamp correction algorithm
+            #
+            #########################################################################################################
             cur_time = time.time()
             if self.time_received is None:
-                self.time_received = cur_time
-                self.base_time = cur_time
+                self.time_received  = cur_time
+                self.base_time      = cur_time
 
             if self.cur_sample % self.reset_period == 0:
                 self.reset_needed = True
@@ -1964,21 +2008,23 @@ class MyoDataWorker(QRunnable):
 
                 if (cur_time - self.time_received >= self.pos_eps) and (
                         cur_time - self.time_received < self.sync_tolerance):
-                    self.reset_skips = 0
-                    self.base_time = cur_time
-                    self.cur_sample = 0
-                    self.reset_needed = False
+                    self.reset_skips    = 0
+                    self.base_time      = cur_time
+                    self.cur_sample     = 0
+                    self.reset_needed   = False
                 else:
                     self.reset_skips += 1
 
                 if (self.reset_skips >= self.max_skips) and (cur_time - self.time_received >= self.pos_eps):
-                    self.reset_skips = 0
-                    self.base_time = cur_time
-                    self.cur_sample = 0
-                    self.reset_needed = False
+                    self.reset_skips    = 0
+                    self.base_time      = cur_time
+                    self.cur_sample     = 0
+                    self.reset_needed   = False
 
             self.time_received = self.base_time + self.cur_sample * (1 / self.emg_sample_rate)
-            self.cur_sample += 1
+            self.cur_sample   += 1
+            #########################################################################################################
+
 
             # Is this tab corresponding to this worker open
             create_events = self.create_event()
@@ -1989,6 +2035,7 @@ class MyoDataWorker(QRunnable):
                 self.start_range = self.samples_count
                 for i in range(len(self.series_list)):
                     self.series_list[i].clear()
+                    # Old backend
                     # self.series_list[i].removePoints(0, NUM_GUI_SAMPLES-1)
                 self.indices_list.clear()
 
@@ -1997,6 +2044,7 @@ class MyoDataWorker(QRunnable):
 
             # Update chart data
             for i in range(len(self.series_list)):
+                # Old backend
                 # self.series_list[i].append(self.samples_count, emg_list[i])
                 self.series_list[i].append(emg_list[i])
             self.indices_list.append(self.samples_count)
@@ -2021,7 +2069,7 @@ class MyoSearchWorker(QRunnable):
         A background Qt thread that:
             1) Searches for Myo devices
             2) Updates a progress bar
-            3) Emits an event upon completion
+            3) Emits a signal upon completion
     """
 
     def __init__(self, cur_port, progress_bar, finished_callback, increments):
@@ -2032,25 +2080,25 @@ class MyoSearchWorker(QRunnable):
         :param increments: Number of increments to progress bar.
         """
         super().__init__()
-        self.cur_port = cur_port
-        self.progress_bar = progress_bar
-        self.finish = MyoSearch()
+        self.cur_port       = cur_port
+        self.progress_bar   = progress_bar
+        self.finish         = MyoSearch()
         self.finish.searchComplete.connect(finished_callback)
 
         # States
-        self.complete = False
-        self.running = False
+        self.complete   = False
+        self.running    = False
 
         #
         # Configurable
         #
-        self.increments = increments  # Progress bar increments
-        self.time_to_search = 3  # In seconds
+        self.increments         = increments  # Progress bar increments
+        self.time_to_search     = 3  # In seconds
         self.currrent_increment = 0
 
     def run(self):
-        self.complete = False
-        self.running = True
+        self.complete   = False
+        self.running    = True
 
         while self.currrent_increment <= self.increments:
 
@@ -2114,16 +2162,16 @@ class GroundTruthWorker(QRunnable):
         """
         super().__init__()
 
-        self.status_label = status_label
-        self.progress_label = progress_label
-        self.desc_title = desc_title
-        self.desc_explain = desc_explain
-        self.cur_movement = cur_movement
-        self.video_player = video_player
-        self.all_video_paths = all_video_paths
-        self.collect_duration = collect_duration
-        self.rest_duration = rest_duration
-        self.num_reps = num_reps
+        self.status_label       = status_label
+        self.progress_label     = progress_label
+        self.desc_title         = desc_title
+        self.desc_explain       = desc_explain
+        self.cur_movement       = cur_movement
+        self.video_player       = video_player
+        self.all_video_paths    = all_video_paths
+        self.collect_duration   = collect_duration
+        self.rest_duration      = rest_duration
+        self.num_reps           = num_reps
 
         self.num_class_A = 12
         self.num_class_B = 17
@@ -2138,24 +2186,24 @@ class GroundTruthWorker(QRunnable):
         # Used to update time remaining
         self.timer = QTimer()
         self.timer.timeout.connect(self.timer_update)
-        self.timer_interval = 100  # units of ms
         self.state_end_event = self.StateComplete()
         self.state_end_event.stateEnded.connect(self.stop_state)
 
         # On video load or video completion, this is triggered
         self.video_player.mediaStatusChanged.connect(self.media_status_changed)
 
+        # State variables
+        self.current_rep        = 0
+        self.state_time_remain  = 0  # seconds
+        self.video_playing      = False
+        self.stopped            = False
+        self.paused             = False
+        self.current_label      = None
+        self.complete           = False
+
         # Configurable parameters
         self.preparation_period = 10.0
-
-        # State variables
-        self.current_rep = 0
-        self.state_time_remain = 0  # seconds
-        self.video_playing = False
-        self.stopped = False
-        self.paused = False
-        self.current_label = None
-        self.complete = False
+        self.timer_interval     = 100  # units of ms
 
     # On finish of repetition/rest/prepation
     class StateComplete(QObject):
@@ -2164,15 +2212,15 @@ class GroundTruthWorker(QRunnable):
     # Qt5, QMediaPlayer enum
     # > "Defines the status of a media player's current media."
     class MediaStatus(Enum):
-        UnknownMediaStatus = 0
-        NoMedia = 1
-        LoadingMedia = 2
-        LoadedMedia = 3
-        StalledMedia = 4
-        BufferingMedia = 5
-        BufferedMedia = 6
-        EndOfMedia = 7
-        InvalidMedia = 8
+        UnknownMediaStatus  = 0
+        NoMedia             = 1
+        LoadingMedia        = 2
+        LoadedMedia         = 3
+        StalledMedia        = 4
+        BufferingMedia      = 5
+        BufferedMedia       = 6
+        EndOfMedia          = 7
+        InvalidMedia        = 8
 
     def run(self):
 
@@ -2197,10 +2245,10 @@ class GroundTruthWorker(QRunnable):
                 #
                 self.current_rep = 0
                 QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "{} s ({}/{})".format(self.preparation_period, self.current_rep,
+                                            Q_ARG(str, "{} s ({}/{})".format(self.preparation_period, self.current_rep,
                                                                           self.num_reps)))
                 QMetaObject.invokeMethod(self.cur_movement, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "Exercise {} - Movement {} of {}".format(ex_label, movement_num + 1,
+                                            Q_ARG(str, "Exercise {} - Movement {} of {}".format(ex_label, movement_num + 1,
                                                                                              len(video_paths))
                                                )
                                          )
@@ -2278,8 +2326,8 @@ class GroundTruthWorker(QRunnable):
         :param video_path: Path to video
         :param period: Time to play video
         """
-        self.video_playing = True
-        self.state_time_remain = period
+        self.video_playing      = True
+        self.state_time_remain  = period
         abs_path = QFileInfo(video_path).absoluteFilePath()
         QMetaObject.invokeMethod(self.video_player, "setMedia", Qt.QueuedConnection,
                                  Q_ARG(QMediaContent, QMediaContent(QUrl.fromLocalFile(abs_path))))

@@ -103,16 +103,26 @@ class TopLevel(QWidget):
         return self.cur_index == 0
 
     def on_device_connected(self, address, rssi, battery_level):
+        """
+            Called on user initiated connection
+
+        :param address: MAC address of connected Myo device
+        """
         self.online_pred_tab.device_connected(address, rssi, battery_level)
-        pass
 
     def on_device_disconnected(self, address):
+        """
+            Called on user initiated disconnect, or unexpected disconnect
+
+        :param address: MAC address of disconnected Myo device
+        """
         self.online_pred_tab.device_disconnected(address)
-        pass
 
     def on_tab_changed(self, value):
         """
             Intercepts a user attempting to switch tabs (to ensure a valid tab switch is taking place)
+
+            value: Desired tab index to switch to
         """
         if self.cur_index == value:
             return
@@ -126,19 +136,21 @@ class TopLevel(QWidget):
         online_pred_idx     = 2
 
         if self.cur_index == data_tool_idx:
+            #
             # Check for incomplete Myo search workers
             #
-            # waiting_on_search = False
-            # for worker in self.data_tools_tab.search_threads:
-            #     if not worker.complete:
-            #         waiting_on_search = True
-            #         break
             waiting_on_search = False
+            for worker in self.data_tools_tab.search_threads:
+                if not worker.complete:
+                    waiting_on_search = True
+                    break
 
             if not waiting_on_search:
 
+                #
                 # Check for background data workers
                 #
+
                 # worker_running  = False
                 # num_widgets     = self.data_tools_tab.ports_found.count()
                 #
@@ -157,7 +169,10 @@ class TopLevel(QWidget):
 
                 if not worker_running:
 
+                    #
                     # Close the background video worker if appropriate
+                    #
+
                     # if not self.data_tools_tab.gt_helper_open:
                     #     if not (self.data_tools_tab.gt_helper.worker is None):
                     #         self.data_tools_tab.gt_helper.stop_videos()
@@ -179,8 +194,9 @@ class TopLevel(QWidget):
             else:
                 self.warn_user("Please wait for Myo device search to complete first.")
 
+
         #
-        # TBD
+        # To control switching out of online training / testing
         #
         elif self.cur_index == online_train_idx:
             valid_switch = True
