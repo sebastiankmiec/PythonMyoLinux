@@ -122,7 +122,7 @@ MOVEMENT_DESC = {
 
                             19: ("Extension Type Grasp", "<b>Simple</b>:<ul><li>Place fingers below an object, and thumb on top</li><li>Pick up the object</li></ul>"),
 
-                            20: ("Power Disk Grasp", "<b>Simple</b>:<ul><li>Grab a disc-like object with a powerful grasp</li>></ul>"),
+                            20: ("Power Disk Grasp", "<b>Simple</b>:<ul><li>Grab a disc-like object with a powerful grasp</li></ul>"),
 
                             21: ("Open Bottle (Tripod Grasp)", "<b>Simple</b>:<ul><li>Open a bottle by the cap from above</li><li>Use only thumb, index and middle finger</li></ul>"),
 

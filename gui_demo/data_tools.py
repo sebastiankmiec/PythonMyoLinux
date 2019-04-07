@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QTab
 
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl, \
-                          QFileInfo)
+                          QFileInfo, QMutex)
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
@@ -57,40 +57,44 @@ class DataTools(QWidget):
     class MyoData:
 
         class ArmbandData:
-            emg_ch = 8
-            accel_ch = 3
-            orient_ch = 4
-            gyro_ch = 3
+            emg_ch          = 8
+            accel_ch        = 3
+            orient_ch       = 4
+            gyro_ch         = 3
+            add_data_lock   = QMutex()
 
             def __init__(self, sync_data, is_master):
-                self.sync_data = sync_data
-                self.is_master = is_master
+                self.sync_data  = sync_data
+                self.is_master  = is_master
                 self.timestamps = []
-                self.labels = []
-                self.emg = [[] for x in range(self.emg_ch)]
-                self.accel = [[] for x in range(self.accel_ch)]
-                self.gyro = [[] for x in range(self.gyro_ch)]
-                self.orient = [[] for x in range(self.orient_ch)]
+                self.labels     = []
+                self.emg        = [[] for x in range(self.emg_ch)]
+                self.accel      = [[] for x in range(self.accel_ch)]
+                self.gyro       = [[] for x in range(self.gyro_ch)]
+                self.orient     = [[] for x in range(self.orient_ch)]
 
             def clear(self):
                 self.timestamps.clear()
                 self.labels.clear()
-                self.emg = [[] for x in range(self.emg_ch)]
-                self.accel = [[] for x in range(self.accel_ch)]
-                self.gyro = [[] for x in range(self.gyro_ch)]
+                self.emg    = [[] for x in range(self.emg_ch)]
+                self.accel  = [[] for x in range(self.accel_ch)]
+                self.gyro   = [[] for x in range(self.gyro_ch)]
                 self.orient = [[] for x in range(self.orient_ch)]
 
             def trim(self, trim_samples):
                 n = len(self.timestamps)
                 self.timestamps = self.timestamps[:n - trim_samples]
-                self.labels = self.labels[:n - trim_samples]
-                self.emg = [x[:n - trim_samples] for x in self.emg]
-                self.accel = [x[:n - trim_samples] for x in self.accel]
-                self.gyro = [x[:n - trim_samples] for x in self.gyro]
-                self.orient = [x[:n - trim_samples] for x in self.orient]
+                self.labels     = self.labels[:n - trim_samples]
+                self.emg        = [x[:n - trim_samples] for x in self.emg]
+                self.accel      = [x[:n - trim_samples] for x in self.accel]
+                self.gyro       = [x[:n - trim_samples] for x in self.gyro]
+                self.orient     = [x[:n - trim_samples] for x in self.orient]
 
             def add_sample(self, time_received, current_label, emg_list, accel_1, accel_2, accel_3, gyro_1, gyro_2,
                            gyro_3, orient_w, orient_x, orient_y, orient_z):
+
+                self.add_data_lock.lock()
+
                 self.timestamps.append(time_received)
                 self.labels.append(current_label)
 
@@ -112,19 +116,22 @@ class DataTools(QWidget):
 
                 self.sync_data(self.is_master)
 
+                self.add_data_lock.unlock()
+
+
         def __init__(self):
             self.band_1 = self.ArmbandData(self.synchronize_data, True)
             self.band_2 = self.ArmbandData(self.synchronize_data, False)
 
             # Synchronization states (update mapping)
-            self.first_timestamp = None
-            self.first_offset = None
-            self.second_timestamp = None
-            self.second_offset = None
+            self.first_timestamp    = None
+            self.first_offset       = None
+            self.second_timestamp   = None
+            self.second_offset      = None
 
-            self.invalid_map = -1
-            self.first_sync = True
-            self.data_mapping = []
+            self.invalid_map    = -1
+            self.first_sync     = True
+            self.data_mapping   = []
 
         def synchronize_data(self, is_master):
 
@@ -135,9 +142,9 @@ class DataTools(QWidget):
             # Default offsets before synchronization begins
             #
             if self.first_sync:
-                if is_master:
+                if is_master and (len(self.band_1.timestamps) > 0):
                     self.first_offset = len(self.band_1.timestamps) - 1
-                else:
+                elif (not is_master) and (len(self.band_2.timestamps) > 0):
                     self.second_offset = len(self.band_2.timestamps) - 1
 
             #
@@ -172,8 +179,8 @@ class DataTools(QWidget):
                     #
                     # Need to wait for new data to arrive
                     #
-                    if ((self.first_offset + 1 >= len(self.band_1.timestamps)) or
-                            (self.second_offset + 1 >= len(self.band_2.timestamps))):
+                    if ((self.first_offset + 1 >= len(self.band_1.timestamps) - 1) or
+                            (self.second_offset + 1 >= len(self.band_2.timestamps) - 1)):
                         return
 
                     self.first_offset += 1
@@ -188,14 +195,14 @@ class DataTools(QWidget):
                     else:
 
                         if min_distance > 0:
-                            while self.first_offset < len(self.band_1.timestamps):
-                                temp_timestamp = self.band_1.timestamps[self.first_offset]
-                                temp_distance = temp_timestamp - sec_timestamp
+                            while self.second_offset < len(self.band_2.timestamps) - 1:
+                                temp_timestamp = self.band_2.timestamps[self.second_offset]
+                                temp_distance = first_timestamp - temp_timestamp
 
                                 if abs(temp_distance) > abs(min_distance):
                                     break
-                                if self.first_offset < len(self.band_1.timestamps) - 1:
-                                    self.first_offset += 1
+                                else:
+                                    self.second_offset += 1
                                     min_distance = temp_distance
 
                             if abs(min_distance) < COPY_THRESHOLD:
@@ -203,14 +210,14 @@ class DataTools(QWidget):
 
                         # min_distance <= (-1) * COPY_THRESHOLD
                         else:
-                            while self.second_offset < len(self.band_2.timestamps):
-                                temp_timestamp = self.band_2.timestamps[self.second_offset]
-                                temp_distance = first_timestamp - temp_timestamp
+                            while self.first_offset < len(self.band_1.timestamps) - 1:
+                                temp_timestamp = self.band_1.timestamps[self.first_offset]
+                                temp_distance = temp_timestamp - sec_timestamp
 
                                 if abs(temp_distance) > abs(min_distance):
                                     break
-                                if self.second_offset < len(self.band_2.timestamps) - 1:
-                                    self.second_offset += 1
+                                else:
+                                    self.first_offset += 1
                                     min_distance = temp_distance
 
                             if abs(min_distance) < COPY_THRESHOLD:
@@ -552,9 +559,13 @@ class DataTools(QWidget):
             full_path_1 = join(self.data_directory, FILENAME_1)
             full_path_2 = join(self.data_directory, FILENAME_2)
             full_path_all = join(self.data_directory, FILENAME_all)
-            first_myo_data = copy.deepcopy(self.data_collected.band_1)
-            sec_myo_data = copy.deepcopy(self.data_collected.band_2)
-            data_mapping = copy.deepcopy(self.data_collected.data_mapping)
+
+            #first_myo_data  = copy.deepcopy(self.data_collected.band_1)
+            #sec_myo_data    = copy.deepcopy(self.data_collected.band_2)
+            #data_mapping    = copy.deepcopy(self.data_collected.data_mapping)
+            first_myo_data  = self.data_collected.band_1
+            sec_myo_data    = self.data_collected.band_2
+            data_mapping    = self.data_collected.data_mapping
 
             # File descriptors for 3 created files
             fd_1 = open(full_path_1, "w")
@@ -623,7 +634,7 @@ class DataTools(QWidget):
                 second_offset = data_mapping[first_offset]
 
                 # Impossible to synchronize data (adequately)
-                if second_offset == self.data_collected.invalid_map:
+                if (second_offset == self.data_collected.invalid_map) or (second_offset >= len(sec_myo_data.timestamps)):
                     continue
 
                 #
@@ -652,20 +663,20 @@ class DataTools(QWidget):
                 fd_all.write("{:.4f},{:.4f},{},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
                              "{:.4f},{:.4f},{:.4f},{:.4f},{},{},{},{},{},{},{},{},{:.4f},{:.4f},{:.4f},{:.4f},{:.4f},"
                              "{:.4f},{:.4f},{:.4f},{:.4f},{:.4f}\n".
-                    format(
-                    first_delta_time, sec_delta_time, label_one,
-                    emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
-                    emg_list[5], emg_list[6], emg_list[7],
-                    orient_list[0], orient_list[1], orient_list[2], orient_list[3],
-                    accel_list[0], accel_list[1], accel_list[2],
-                    gyro_list[0], gyro_list[1], gyro_list[2],
+                        format(
+                        first_delta_time, sec_delta_time, label_one,
+                        emg_list[0], emg_list[1], emg_list[2], emg_list[3], emg_list[4],
+                        emg_list[5], emg_list[6], emg_list[7],
+                        orient_list[0], orient_list[1], orient_list[2], orient_list[3],
+                        accel_list[0], accel_list[1], accel_list[2],
+                        gyro_list[0], gyro_list[1], gyro_list[2],
 
-                    emg_list_2[0], emg_list_2[1], emg_list_2[2], emg_list_2[3], emg_list_2[4],
-                    emg_list_2[5], emg_list_2[6], emg_list_2[7],
-                    orient_list_2[0], orient_list_2[1], orient_list_2[2], orient_list_2[3],
-                    accel_list_2[0], accel_list_2[1], accel_list_2[2],
-                    gyro_list_2[0], gyro_list_2[1], gyro_list_2[2]
-                )
+                        emg_list_2[0], emg_list_2[1], emg_list_2[2], emg_list_2[3], emg_list_2[4],
+                        emg_list_2[5], emg_list_2[6], emg_list_2[7],
+                        orient_list_2[0], orient_list_2[1], orient_list_2[2], orient_list_2[3],
+                        accel_list_2[0], accel_list_2[1], accel_list_2[2],
+                        gyro_list_2[0], gyro_list_2[1], gyro_list_2[2]
+                    )
                 )
 
             fd_1.close()
@@ -682,7 +693,6 @@ class DataTools(QWidget):
             full_path = join(self.data_directory, SINGLE_MYO_FILENAME)
 
             # Select data from valid device
-            data_ref = None
             if len(self.data_collected.band_1.timestamps) == 0:
                 data_ref = copy.deepcopy(self.data_collected.band_2)
             else:
@@ -1876,7 +1886,7 @@ class MyoDataWorker(QRunnable):
         self.update_period = 4
         self.emg_sample_rate = 200  # 200 hz
         self.sync_tolerance = 15 / 1000
-        self.pos_eps = 2.5 / 1000
+        self.pos_eps = 1 / 1000
         self.max_skips = 200
         self.reset_period = 400
 
@@ -2136,7 +2146,7 @@ class GroundTruthWorker(QRunnable):
         self.video_player.mediaStatusChanged.connect(self.media_status_changed)
 
         # Configurable parameters
-        self.preparation_period = 20.0
+        self.preparation_period = 10.0
 
         # State variables
         self.current_rep = 0
@@ -2258,9 +2268,8 @@ class GroundTruthWorker(QRunnable):
         #
         # If user pressed stop
         #
-        if self.stopped:
-            self.update.workerStopped.emit()
         self.complete = True
+        self.update.workerStopped.emit()
 
     def play_video(self, video_path, period):
         """

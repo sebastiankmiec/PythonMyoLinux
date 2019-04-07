@@ -3,7 +3,8 @@
 #
 from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QTabWidget, QFileDialog, QMessageBox,
                              QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
-                             QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar)
+                             QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar,
+                             QSpacerItem, QStackedWidget)
 
 from PyQt5.QtGui import QPixmap, QIcon
 from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl,\
@@ -11,6 +12,21 @@ from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG,
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+
+
+#
+# Imports for online prediction tasks
+#
+from scipy.signal import butter, lfilter
+from scipy.stats import multivariate_normal
+import numpy as np
+import ninaeval
+from ninaeval.utils.gt_tools_v3 import optimize_start_end
+
+try:
+    import cPickle as pickle
+except:
+    import pickle
 
 #
 # Miscellaneous imports
@@ -22,6 +38,7 @@ from functools import partial
 from os.path import curdir, exists, join, abspath
 import copy
 from serial.tools.list_ports import comports
+import copy
 
 #
 # Submodules in this repository
@@ -30,753 +47,1198 @@ from pymyolinux import MyoDongle
 from movements import *
 from param import *
 
-
-
-########################################################################################################################
-########################################################################################################################
-########################################################################################################################
-#
-# Custom PyQt5 events (used by QRunnables)
-#
-########################################################################################################################
-########################################################################################################################
-########################################################################################################################
-
-# Used by GroundTruthWorker
-class GTWorkerUpdate(QObject):
-    workerStarted = pyqtSignal()
-    workerUnpaused = pyqtSignal()
-    workerPaused = pyqtSignal()
-    workerStopped = pyqtSignal()
-
-########################################################################################################################
-########################################################################################################################
-########################################################################################################################
-
-
 class OnlineTraining(QWidget):
 
-    def __init__(self):
-        super().__init__()
+    class MovementsSelection(QMainWindow):
 
-        # Each video path has the following format:
-        #   -> (1, 2, 3):
-        #       1: Path relative to video_dir
-        #       2: Minimum video number in specified path
-        #       3. Maximum video number in specified path
-        #
-        self.video_dir = "../gesture_videos"
-        self.video_path_template = [
-            ("arrows/exercise_a/a{}.mp4", 12),
-            ("arrows/exercise_b/b{}.mp4", 17),
-            ("arrows/exercise_c/c{}.mp4", 23)
-        ]
+        def __init__(self):
+            super().__init__()
+            self.init_ui()
+
+        def init_ui(self):
+            self.setGeometry(0, 0, 1024/2, 768/2)
+            top_level_widget = QWidget(self)
+            self.setCentralWidget(top_level_widget)
+
+            self.setWindowTitle("Select Desired Movements")
+
+    class MyoConnectedWidget(QWidget):
+
+        def __init__(self, address, rssi, battery):
+            super().__init__()
+            self.address = address
+            self.init_ui(address, rssi, battery)
+
+        def init_ui(self, address, rssi, battery):
+
+            infoLayout = QHBoxLayout()
+            infoLayout.setSpacing(5)
+
+            # Myo armband icon
+            lbl = QLabel(self)
+            orig = QPixmap(join(abspath(__file__).replace("online_test.py", ""), "icons/myo.png"))
+            new = orig.scaled(QSize(30, 30), Qt.KeepAspectRatio)
+            lbl.setPixmap(new)
+
+            #
+            # Format the Myo hardware (MAC) into a readable form
+            #
+            infoLayout.addWidget(lbl)
+            formatted_address = ""
+            length = len(address.hex())
+
+            for i, ch in enumerate(address.hex()):
+                formatted_address += ch
+                if ((i - 1) % 2 == 0) and (i != length - 1):
+                    formatted_address += "-"
+
+            vline = QFrame()
+            vline.setFrameShape(QFrame.VLine)
+            vline.setFrameShadow(QFrame.Sunken)
+            # vline2 = QFrame()
+            # vline2.setFrameShape(QFrame.VLine)
+            # vline2.setFrameShadow(QFrame.Sunken)
+
+            #
+            # Myo armband address, signal strength
+            #
+            addr_label = QLabel(formatted_address)
+            addr_label.setContentsMargins(5, 0, 0, 0)
+            cur_font = addr_label.font()
+            cur_font.setPointSize(10)
+            addr_label.setFont(cur_font)
+            infoLayout.addWidget(addr_label)
+            infoLayout.addWidget(vline)
+            # rssi_label = QLabel(str(rssi) + " dBm")
+            # infoLayout.addWidget(rssi_label)
+            # infoLayout.addWidget(vline2)
+            # infoLayout.setStretchFactor(rssi_label, 3)
+            infoLayout.setStretchFactor(addr_label, 4)
+
+            #
+            # Battery Level
+            #
+            self.battery_level = QProgressBar()
+            self.battery_level.setMinimum(0)
+            self.battery_level.setMaximum(100)
+            self.battery_level.setValue(battery)
+            infoLayout.addWidget(self.battery_level)
+            infoLayout.setStretchFactor(self.battery_level, 2)
+
+
+
+            self.setLayout(infoLayout)
+
+    def __init__(self, myo_data):
+        super().__init__()
+        self.myo_data = myo_data
+
+        # Configurable
+        self.min_noise_duration = 2 # seconds
+        self.noise_increments   = 100
 
         # States
-        self.playing = False
-        self.all_video_paths = None
-        self.worker = None
-        self.unpausing = False
-        self.pausing = False
-        self.shutdown = False
+        self.collecting_noise   = False
+        self.valid_model        = False
+        self.noise_model_ready  = False
+        self.classifier_model   = None
+        self.noise_worker       = None
+        self.pred_worker        = None
+
+        #
+        # To select movements
+        #
+        self.move_select = self.MovementsSelection()
+
+        #
+        # For video playing
+        #
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.timer_update)
 
         self.init_ui()
 
+
     def init_ui(self):
 
-        # DataTools top layout
-        self.setContentsMargins(5, 15, 5, 5)
+        self.top_layout = QVBoxLayout()
+        self.top_layout.setContentsMargins(10, 10, 10, 10)
+        self.top_layout.setSpacing(15)
 
         #
-        # Contains all widgets within this main window
+        # Top "message box" / time remaining
         #
-        #top_level_widget = QWidget(self)
-        #self.setCentralWidget(top_level_widget)
-        top_layout = QGridLayout()
-        top_layout.setContentsMargins(10, 10, 10, 10)
-        top_layout.setSpacing(12)
-
-        #
-        # Top Text
-        #
-        self.status_label = QLabel("Waiting to Start...")
-        self.status_label.setStyleSheet(" font-weight: bold; font-size: 18pt; "
-                                        "   color: red;")
+        message_layout  = QHBoxLayout()
+        self.status_label = QLabel("Waiting for Preparation...")
+        self.status_label.setStyleSheet(" font-weight: bold; font-size: 16pt; color: red;")
         self.status_label.setAlignment(Qt.AlignCenter)
-        self.progress_label = QLabel("0.0s (1 / 1)")
-        self.progress_label.setStyleSheet(" font-size: 16pt; color: black;")
+        self.progress_label = QLineEdit("N/A")
+        self.progress_label.setReadOnly(True)
+        self.progress_label.setStyleSheet("font-size: 14pt; color: black; background: #eeeeee; border: none;")
         self.progress_label.setAlignment(Qt.AlignCenter)
 
-        #
-        # Video box
-        #
-        self.setWindowTitle("Ground Truth Helper")
-        self.video_player = QMediaPlayer(None, QMediaPlayer.VideoSurface)
-        videoWidget = QVideoWidget()
+        message_layout.addWidget(self.status_label)
+        message_layout.addWidget(QWidget())
+        message_layout.addWidget(self.progress_label)
+        message_layout.addWidget(QWidget())
+        message_layout.setStretch(0, 66)
+        message_layout.setStretch(1, 11)
+        message_layout.setStretch(2, 11)
+        message_layout.setStretch(3, 11)
+        self.top_layout.addLayout(message_layout)
 
         #
-        # Description Box
+        # Video player
         #
-        description_box = QGroupBox()
-        description_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        description_box.setContentsMargins(0, 0, 0, 0)
-        desc_layout = QVBoxLayout()
-        desc_layout.setContentsMargins(0, 0, 0, 0)
-        desc_layout.setSpacing(0)
+        video_layout        = QHBoxLayout()
+        self.video_player   = QMediaPlayer(None, QMediaPlayer.VideoSurface)
+        video_widget        = QVideoWidget()
+        video_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.video_player.setVideoOutput(video_widget)
 
+        video_layout.addWidget(video_widget)
+
+        #
+        # Description & Play Buttons
+        #
+        descrip_layout  = QVBoxLayout()
         self.desc_title = QLabel("No Movement")
         self.desc_title.setStyleSheet("border: 4px solid gray; font-weight: bold; font-size: 14pt;")
         self.desc_title.setAlignment(Qt.AlignCenter)
         self.desc_explain = QTextEdit("No description available.")
         self.desc_explain.setStyleSheet("border: 4px solid gray; font-size: 12pt; border-color: black;")
         self.desc_explain.setReadOnly(True)
+        self.desc_explain.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        descrip_layout.addWidget(self.desc_title)
+        descrip_layout.addWidget(self.desc_explain)
 
-        desc_layout.addWidget(self.desc_title)
-        desc_layout.addWidget(self.desc_explain)
-        desc_layout.setStretchFactor(self.desc_title, 1)
-        desc_layout.setStretchFactor(self.desc_explain, 9)
-        description_box.setLayout(desc_layout)
-
-        #
-        # Start, Pause, Stop Buttons
-        #
-        start_stop_box = QGroupBox()
-        start_stop_box.setContentsMargins(0, 0, 0, 0)
-        start_stop_box.setObjectName("StartBox")
-        start_box_layout = QGridLayout()
-
-        self.current_movement = QLabel("")
-        self.current_movement.setAlignment(Qt.AlignCenter)
-        self.current_movement.setStyleSheet("background-color: #cccccc; border: 1px solid gray; font-size: 14pt;"
-                                            "   font-weight: bold;")
-        start_box_layout.addWidget(self.current_movement, 0, 1, 1, 3)
-
-        self.play_button = QPushButton()
-        self.play_button.setText("Start")
-        self.play_button.setStyleSheet("font-weight: bold;")
-        self.play_button.clicked.connect(self.start_videos)
-        self.pause_button = QPushButton()
-        self.pause_button.setText("Pause")
-        self.pause_button.setStyleSheet("font-weight: bold;")
-        self.pause_button.clicked.connect(self.pause_videos)
-        self.stop_button = QPushButton()
-        self.stop_button.setText("Stop")
-        self.stop_button.setStyleSheet("font-weight: bold;")
-        self.stop_button.clicked.connect(self.stop_videos)
-        start_box_layout.addWidget(self.play_button, 2, 1)
-        start_box_layout.addWidget(self.pause_button, 2, 2)
-        start_box_layout.addWidget(self.stop_button, 2, 3)
-
-        self.pause_button.setEnabled(False)
-        self.stop_button.setEnabled(False)
-
-        separator = QFrame()
-        separator.setFrameShape(QFrame.HLine)
-        separator.setFrameShadow(QFrame.Sunken)
-        separator.setLineWidth(2)
-        start_box_layout.addWidget(separator, 1, 1, 1, 3)
-
-        start_stop_box.setLayout(start_box_layout)
-        start_box_layout.setColumnStretch(0, 10)
-        start_box_layout.setColumnStretch(1, 10)
-        start_box_layout.setColumnStretch(2, 10)
-        start_box_layout.setColumnStretch(3, 10)
-        start_box_layout.setColumnStretch(4, 10)
-        start_box_layout.setRowStretch(0, 1)
-        start_box_layout.setRowStretch(1, 1)
-        start_box_layout.setRowStretch(2, 1)
+        video_layout.addLayout(descrip_layout)
+        video_layout.setStretch(0, 66)
+        video_layout.setStretch(1, 33)
+        self.top_layout.addLayout(video_layout)
 
         #
-        # Training Session Parameters
+        # Preparation Box
         #
-        parameters_box = QGroupBox()
-        parameters_box.setTitle("Collection Parameters")
-        parameters_box.setObjectName("CollecParamBox")
-        parameters_box.setStyleSheet(
-            "QGroupBox#CollecParamBox { border: 1px solid gray; border-radius: 7px; margin-top: 0.5em;"
-            "                              font-weight: bold; }"
-            "QGroupBox#CollecParamBox::title { subcontrol-origin: margin; left: 9px; }")
-        parameters_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        top_param_layout = QGridLayout()
+        self.parameters_box = QGroupBox()
+        self.parameters_box.setTitle("Preparation Phase")
+        self.parameters_box.setObjectName("CollecParamBox")
+        self.parameters_box.setStyleSheet(
+            "QGroupBox#CollecParamBox { border: 1px solid gray; border-radius: 7px; margin-top: 1.6em;"
+            "                              font-weight: bold; background-color: #dddddd;}"
+            "QGroupBox#CollecParamBox::title { subcontrol-origin: margin; subcontrol-position: top center; "
+            " border: 1px solid gray; border-radius: 7px;}")
+        self.parameters_box.title()
+        font = self.parameters_box.font()
+        font.setPointSize(14)
+        self.parameters_box.setFont(font)
+        self.parameters_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
-        rep_title = QLabel("Number of Repetitions")
-        self.num_reps = QLineEdit("6")
-        top_param_layout.addWidget(rep_title, 0, 0)
-        top_param_layout.addWidget(self.num_reps, 0, 2, 1, 2)
-        top_param_layout.setSpacing(0)
+        self.bottom_panel = QStackedWidget()
+        self.bottom_panel.addWidget(self.parameters_box)
 
-        collect_title = QLabel("(<b>Collect</b>\\<b>Rest</b>) Duration")
-        self.collect_entry = QLineEdit("5.0")
-        self.rest_entry = QLineEdit("3.0")
-        top_param_layout.addWidget(collect_title, 1, 0)
-        top_param_layout.addWidget(self.collect_entry, 1, 2)
-        top_param_layout.addWidget(self.rest_entry, 1, 3)
-
-        ex_label = QLabel("Exercise (<b>A</b>\\<b>B</b>\\<b>C</b>)")
-        check_layout = QHBoxLayout()
-        check_layout.setSpacing(0)
-        check_layout.setContentsMargins(0, 0, 0, 0)
-
-        self.ex_a_check = QCheckBox()
-        self.ex_a_check.setChecked(True)
-        self.ex_b_check = QCheckBox()
-        self.ex_b_check.setChecked(True)
-        self.ex_c_check = QCheckBox()
-        self.ex_c_check.setChecked(True)
-        check_layout.addWidget(self.ex_a_check)
-        check_layout.addWidget(self.ex_b_check)
-        check_layout.addWidget(self.ex_c_check)
-        top_param_layout.addWidget(ex_label, 2, 0)
-        top_param_layout.addLayout(check_layout, 2, 2, 1, 2)
-        top_param_layout.setColumnStretch(0, 5)
-        top_param_layout.setColumnStretch(1, 1)
-        top_param_layout.setColumnStretch(2, 3)
-        top_param_layout.setColumnStretch(3, 3)
-        parameters_box.setLayout(top_param_layout)
+        prep_layout = QGridLayout()
+        prep_layout.setHorizontalSpacing(15)
+        self.parameters_box.setLayout(prep_layout)
 
         #
-        # Positions and sizes of all widgets in grid layout
+        # Controls Box (initially hidden)
         #
-        top_layout.addWidget(self.status_label, 0, 0)
-        top_layout.addWidget(self.progress_label, 0, 1)
-        top_layout.addWidget(videoWidget, 1, 0)
-        top_layout.addWidget(description_box, 1, 1)
-        top_layout.addWidget(start_stop_box, 2, 0)
-        top_layout.addWidget(parameters_box, 2, 1)
-        top_layout.setRowStretch(0, 7)
-        top_layout.setRowStretch(1, 100)
-        top_layout.setRowStretch(2, 10)
-        top_layout.setColumnStretch(0, 66)
-        top_layout.setColumnStretch(1, 33)
+        self.controls_box = QGroupBox()
+        self.controls_box.setObjectName("ControlBox")
+        self.controls_box.setStyleSheet(
+            "QGroupBox#ControlBox { border: 1px solid gray; border-radius: 7px; font-weight: bold;"
+            "                            background-color: #dddddd; height: 60px;}")
+        self.controls_box.setFixedHeight(60)
+        self.controls_box.setAlignment(Qt.AlignBottom)
+        self.controls_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.bottom_panel.addWidget(self.controls_box)
 
-        #
-        # Set widget to contain window contents
-        #
-        #top_level_widget.setLayout(top_layout)
-        self.setLayout(top_layout)
-        self.video_player.setVideoOutput(videoWidget)
-        self.video_player.setMuted(True)
 
-    def enable_video_buttons(self, state_play, state_pause, state_stop):
-        """
-            A helper function to set the current states of the play/pause/stop buttons.
+        self.top_layout.addWidget(self.bottom_panel)
+        self.bottom_panel.setCurrentIndex(0)
+        self.bottom_panel.adjustSize()
 
-        :param state_play: [bool] Enable/disable play button.
-        :param state_pause: [bool] Enable/disable pause button.
-        :param state_stop: [bool] Enable/disable stop button.
-        :return:
-        """
-        self.play_button.setEnabled(state_play)
-        self.pause_button.setEnabled(state_pause)
-        self.stop_button.setEnabled(state_stop)
-
-    def start_videos(self):
-        """
-            A function called when the "Start" button is pressed.
-                > Either
-                    i. Starts the background worker thread to play video, update text fields and more
-                    ii. Unpauses the background worker, in order to continue doing the aforesaid.
-        """
-
-        # Disable play/pause/stop buttons until it is safe
-        self.enable_video_buttons(False, False, False)
-
-        # If any button click is still being processed
-        if (self.unpausing) or (self.pausing) or (self.shutdown):
-            return
-
-        if self.playing:
-            self.enable_video_buttons(False, True, True)
-            return
-
-        if self.worker is not None:
-            self.worker.force_unpause()
-            return
+        controls_layout = QGridLayout()
+        self.controls_start = QPushButton("Start")
+        self.controls_start.setStyleSheet("font-weight: bold")
+        self.controls_pause = QPushButton("Pause")
+        self.controls_pause.setStyleSheet("font-weight: bold")
+        self.controls_stop  = QPushButton("Stop")
+        self.controls_stop.setStyleSheet("font-weight: bold")
+        controls_layout.addWidget(self.controls_start, 0, 1)
+        controls_layout.addWidget(self.controls_pause, 0, 2)
+        controls_layout.addWidget(self.controls_stop, 0, 3)
+        controls_layout.setColumnStretch(0, 1)
+        controls_layout.setColumnStretch(1, 1)
+        controls_layout.setColumnStretch(2, 1)
+        controls_layout.setColumnStretch(3, 1)
+        controls_layout.setColumnStretch(4, 1)
+        self.controls_box.setLayout(controls_layout)
 
         #
-        # Check for valid inputs
+        # Preparation Box: Model Selection
         #
-        def throw_error_message(self, message):
-            # Re-enable video buttons
-            self.enable_video_buttons(True, False, False)
+        self.model_button = QPushButton("Select Model")
+        self.model_button.clicked.connect(self.on_model_select)
+        self.model_button.setStyleSheet("font-weight: bold")
+        prep_layout.addWidget(self.model_button, 0, 0, 1, 2)
 
-            # Display warning
-            self.warning = QErrorMessage()
-            self.warning.showMessage(message)
-            self.warning.show()
-            return None
+        hline = QFrame()
+        hline.setFrameShape(QFrame.HLine)
+        hline.setFrameShadow(QFrame.Sunken)
+        prep_layout.addWidget(hline, 1, 0, 1, 2)
 
-        def acquire_var(self, text, widget_name, func):
-            try:
-                temp = func(text)
-            except:
-                # Re-enable video buttons
-                self.enable_video_buttons(True, False, False)
+        name_title = QLabel("Name")
+        prep_layout.addWidget(name_title, 2, 0)
+        samples_title = QLabel("Samples")
+        prep_layout.addWidget(samples_title, 3, 0)
 
-                # Display warning
-                if func == float:
-                    return throw_error_message(self, "Please set a valid float for \"{}\".".format(widget_name))
-                else:
-                    return throw_error_message(self, "Please set a valid integer for \"{}\".".format(widget_name))
-            return temp
+        self.model_name = QLineEdit()
+        self.model_name.setReadOnly(True)
+        prep_layout.addWidget(self.model_name, 2, 1)
+        self.samples_field = QLineEdit()
+        self.samples_field.setReadOnly(True)
+        prep_layout.addWidget(self.samples_field, 3, 1)
 
-        if ((acquire_var(self, self.collect_entry.text(), "Collect Duration", float) is None) or
-                (acquire_var(self, self.collect_entry.text(), "Rest Duration", float) is None) or
-                (acquire_var(self, self.num_reps.text(), "Number of Repetitions", int) is None)):
-            return
+        # Note: No copy constructors for Qt5 objects...
+        vline = QFrame()
+        vline.setFrameShape(QFrame.VLine)
+        vline.setFrameShadow(QFrame.Sunken)
+        vline2 = QFrame()
+        vline2.setFrameShape(QFrame.VLine)
+        vline2.setFrameShadow(QFrame.Sunken)
+        vline3 = QFrame()
+        vline3.setFrameShape(QFrame.VLine)
+        vline3.setFrameShadow(QFrame.Sunken)
+        prep_layout.addWidget(vline, 0, 2, 4, 1)
 
-        self.collect_duration = acquire_var(self, self.collect_entry.text(), "Collect Duration", float)
-        self.rest_duration = acquire_var(self, self.rest_entry.text(), "Rest Duration", float)
-        self.repetitions = acquire_var(self, self.num_reps.text(), "Rest Duration", int)
-
-        if (not self.ex_a_check.isChecked()) and (not self.ex_b_check.isChecked()) and (
-                not self.ex_c_check.isChecked()):
-            return throw_error_message(self, "Please select at least one exercise.")
-
-        if self.collect_duration < 1.0:
-            return throw_error_message(self, "Please select a collect duration >= 1.0s.")
-        if self.rest_duration < 1.0:
-            return throw_error_message(self, "Please select a rest duration >= 1.0s.")
-        if self.repetitions < 1:
-            return throw_error_message(self, "Please select a number of repetitions >= 1.")
 
         #
-        # Attempt to find all videos
+        # Preparation Box: Devices Connected
         #
-        exercises_found = self.check_video_paths()
+        connected_title  = QLabel("Devices Connected")
+        connected_title.setAlignment(Qt.AlignCenter)
+        connected_title.setStyleSheet("font-weight: bold")
+        prep_layout.addWidget(connected_title, 0, 3)
+        self.devices_connected = QListWidget()
+        self.devices_connected.verticalScrollBar().setDisabled(True)
 
-        def missing_exer(self, ex_found, ex_label):
-            if not ex_found:
-                # Re-enable video buttons
-                self.enable_video_buttons(True, False, False)
+        hline3 = QFrame()
+        hline3.setFrameShape(QFrame.HLine)
+        hline3.setFrameShadow(QFrame.Sunken)
+        prep_layout.addWidget(hline3, 1, 3)
 
-                # Display warning
-                self.warning = QErrorMessage()
-                self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
-                self.warning.show()
-            return ex_found
-
-        if ((not missing_exer(self, exercises_found[0], "A")) or (not missing_exer(self, exercises_found[1], "B")) or
-                (not missing_exer(self, exercises_found[2], "C"))):
-            return
+        prep_layout.addWidget(self.devices_connected, 2, 3, 2, 1)
+        prep_layout.addWidget(vline3, 0, 4, 4, 1)
 
         #
-        # Start playing videos, and updating text fields, via background thread
+        # Preparation Box: Movements Selected
         #
-        self.worker = GroundTruthWorker(self.status_label, self.progress_label, self.desc_title, self.desc_explain,
-                                        self.current_movement, self.video_player, self.all_video_paths,
-                                        self.collect_duration, self.rest_duration, self.repetitions,
-                                        self.on_worker_started, self.on_worker_unpaused, self.on_worker_paused,
-                                        self.on_worker_stopped)
-        QThreadPool.globalInstance().start(self.worker)
+        self.movements_button = QPushButton("Select Movements")
+        self.movements_button.clicked.connect(self.on_movements_selected)
+        self.movements_button.setStyleSheet("font-weight: bold")
+        prep_layout.addWidget(self.movements_button, 0, 5)
+        self.movements_selected = QListWidget()
 
+        hline3 = QFrame()
+        hline3.setFrameShape(QFrame.HLine)
+        hline3.setFrameShadow(QFrame.Sunken)
+        prep_layout.addWidget(hline3, 1, 5)
 
-    def enable_video_buttons(self, state_play, state_pause, state_stop):
-        """
-            A helper function to set the current states of the play/pause/stop buttons.
-
-        :param state_play: [bool] Enable/disable play button.
-        :param state_pause: [bool] Enable/disable pause button.
-        :param state_stop: [bool] Enable/disable stop button.
-        :return:
-        """
-        self.play_button.setEnabled(state_play)
-        self.pause_button.setEnabled(state_pause)
-        self.stop_button.setEnabled(state_stop)
-
-    def on_worker_started(self):
-        """
-            This function is called when the background worker has started.
-        """
-        self.playing = True
-        self.enable_video_buttons(False, True, True)
-
-    def on_worker_unpaused(self):
-        """
-             This function is called when the background worker has unpaused.
-         """
-        self.playing = True
-        self.enable_video_buttons(False, True, True)
-        self.unpausing = False
-
-    def on_worker_paused(self):
-        """
-            This function is called when the background worker has paused.
-        """
-        self.playing = False
-        self.pausing = False
-        self.enable_video_buttons(True, False, True)
-
-    def on_worker_stopped(self):
-        """
-            This function is called when the background worker has finished execution of run().
-        """
-        self.playing = False
-        self.shutdown = False
-        self.worker = None
-
-        # Update GUI appearance
-        self.status_label.setText("Waiting to Start...")
-        self.status_label.setStyleSheet(" font-weight: bold; font-size: 18pt; "
-                                        "   color: red;")
-        self.progress_label.setText("0.0s (1 / 1)")
-        self.desc_title.setText("No Movement")
-        self.desc_explain.setText("No description available.")
-        self.current_movement.setText("")
-
-        self.enable_video_buttons(True, False, False)
-
-    def pause_videos(self):
-        """
-            This function is called when the user presses "Pause".
-                > The background worker pauses the playback of video, and updating of text fields.
-                > The ground truth labels also become invalid.
-        """
-        if (not self.playing) or (self.pausing) or (self.shutdown):
-            return
-        self.enable_video_buttons(False, False, False)
-        self.pausing = True
-
-        # Pause the background worker
-        self.worker.force_pause()
-
-    def stop_videos(self):
-        """
-            This function is called when the user presses "Stop".
-                > The background worker finishes executing the run() function as a result of being "stopped".
-        """
-        if ((not self.playing) and (self.worker is None)) or (self.shutdown):
-            return
-        self.enable_video_buttons(False, False, False)
-        self.shutdown = True
-
-        # Force the background worker to leave run()
-        self.worker.force_stop()
-
-    def check_video_paths(self):
-        """
-            Determines if an exercise has all videos necessary for playback, upon pressing "Start".
-
-        :return: [bool, bool, bool]
-
-                > Where each bool determines if exercise A/B/C has all videos available.
-        """
-
-        exercises_found = [True, True, True]
-        self.all_video_paths = [("A", []), ("B", []), ("C", [])]
-
-        def create_exercise_paths(self, ex_label):
-            ex_index = ord(ex_label) - ord('A')
-            found_videos = True
-            path_template = join(self.video_dir, self.video_path_template[ex_index][0])
-            max_idx = self.video_path_template[ex_index][1]
-            ex_path_created = []
-
-            for i in range(1, max_idx + 1):
-                full_path = path_template.format(i)
-                ex_path_created.append(full_path)
-
-                if not exists(full_path):
-                    found_videos = False
-                    break
-
-            self.all_video_paths[ex_index][1].extend(ex_path_created)
-            return found_videos
-
-        if self.ex_a_check.isChecked():
-            exercises_found[0] = create_exercise_paths(self, "A")
-        if self.ex_b_check.isChecked():
-            exercises_found[1] = create_exercise_paths(self, "B")
-        if self.ex_c_check.isChecked():
-            exercises_found[2] = create_exercise_paths(self, "C")
-
-        return exercises_found
-
-    #
-    # Used for data logging, by TopLevel
-    #
-    def get_current_label(self):
-        """
-        :return: [int] Ground truth label for current movement
-        """
-        if (self.worker is None) or (not self.playing):
-            return -1
-        else:
-            if self.worker.current_label is None:
-                return -1
-            else:
-                return self.worker.current_label
-
-class GroundTruthWorker(QRunnable):
-    """
-        A background worker that controls playback of videos and text field updates, for the GT Helper.
-    """
-
-    def __init__(self, status_label, progress_label, desc_title, desc_explain, cur_movement, video_player,
-                 all_video_paths, collect_duration, rest_duration, num_reps, on_worker_started, on_worker_unpaused,
-                 on_worker_paused, on_worker_stopped):
-        """
-        :param status_label: A QLabel displaying a message of what the GT Helper is currently performing.
-        :param progress_label:  A QLabel displaying the current progress of data collection.
-        :param desc_title: A QLabel displaying the name of current movement.
-        :param desc_explain: A QLabel describing how to perform the current movement.
-        :param cur_movement: A QLabel displaying the current exercise and movement number.
-        :param video_player: A QMediaPlayer, to show videos of gestures performed.
-        :param all_video_paths: An object containing paths to all selected videos (based on exercises checked off).
-        :param collect_duration: Duration of gesture data collection.
-        :param rest_duration: Duration of rest data collection.
-        :param num_reps: Number of repetitions to be performed per movement.
-        :param on_worker_started: A callback function used once this background worker has started.
-        :param on_worker_unpaused: A callback function used once this background worker has unpaused.
-        :param on_worker_paused: A callback function used once this background worker has paused.
-        :param on_worker_stopped: A callback function used once this background worker has stopped.
-        """
-        super().__init__()
-
-        self.status_label = status_label
-        self.progress_label = progress_label
-        self.desc_title = desc_title
-        self.desc_explain = desc_explain
-        self.cur_movement = cur_movement
-        self.video_player = video_player
-        self.all_video_paths = all_video_paths
-        self.collect_duration = collect_duration
-        self.rest_duration = rest_duration
-        self.num_reps = num_reps
-
-        self.num_class_A = 12
-        self.num_class_B = 17
-
-        # Signals
-        self.update = GTWorkerUpdate()
-        self.update.workerStarted.connect(on_worker_started)
-        self.update.workerUnpaused.connect(on_worker_unpaused)
-        self.update.workerPaused.connect(on_worker_paused)
-        self.update.workerStopped.connect(on_worker_stopped)
-
-        # Used to update time remaining
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.timer_update)
-        self.timer_interval = 100  # units of ms
-        self.state_end_event = self.StateComplete()
-        self.state_end_event.stateEnded.connect(self.stop_state)
-
-        # On video load or video completion, this is triggered
-        self.video_player.mediaStatusChanged.connect(self.media_status_changed)
-
-        # Configurable parameters
-        self.preparation_period = 20.0
-
-        # State variables
-        self.current_rep = 0
-        self.state_time_remain = 0  # seconds
-        self.video_playing = False
-        self.stopped = False
-        self.paused = False
-        self.current_label = None
-        self.complete = False
-
-    # On finish of repetition/rest/prepation
-    class StateComplete(QObject):
-        stateEnded = pyqtSignal()
-
-    # Qt5, QMediaPlayer enum
-    # > "Defines the status of a media player's current media."
-    class MediaStatus(Enum):
-        UnknownMediaStatus = 0
-        NoMedia = 1
-        LoadingMedia = 2
-        LoadedMedia = 3
-        StalledMedia = 4
-        BufferingMedia = 5
-        BufferedMedia = 6
-        EndOfMedia = 7
-        InvalidMedia = 8
-
-    def run(self):
-
-        # Re-enable video buttons
-        self.complete = False
-        self.update.workerStarted.emit()
-
-        for exercise in self.all_video_paths:
-
-            if self.stopped:
-                break
-
-            ex_label = exercise[0]
-            video_paths = exercise[1]
-
-            for movement_num, video_path in enumerate(video_paths):
-
-                if self.stopped:
-                    break
-                #
-                # Setup for current movement
-                #
-                self.current_rep = 0
-                QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, "{} s ({}/{})".format(self.preparation_period, self.current_rep,
-                                                                                self.num_reps)))
-                QMetaObject.invokeMethod(self.cur_movement, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, "Exercise {} - Movement {} of {}".format(ex_label, movement_num + 1,
-                                                                                   len(video_paths))
-                                                )
-                                         )
-
-                current_description = MOVEMENT_DESC[ex_label][movement_num + 1]
-                QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
-                                            Q_ARG(str, current_description[0]))
-                QMetaObject.invokeMethod(self.desc_explain, "setText",
-                                         Qt.QueuedConnection, Q_ARG(str, current_description[1]))
-
-                #
-                # Preparation period
-                #
-                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "Preparing for repetition 1..." ))
-                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                         Q_ARG(str, "font-weight: bold; font-size: 18pt; color: blue;"))
-                self.play_video(video_path, self.preparation_period)
-                self.current_label = None
-
-                while self.video_playing or (self.paused and not self.stopped):
-                    time.sleep(self.timer_interval / 1000)
-
-                if self.stopped:
-                    break
-
-                #
-                # Collecting\resting periods
-                #
-                for i in range(self.num_reps):
-
-                    # Collect
-                    self.current_rep = i + 1
-                    QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                             Q_ARG(str, "Collecting for repetition {}...".format(self.current_rep)))
-                    QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                             Q_ARG(str, "font-weight: bold; font-size: 18pt; color: green;"))
-                    self.play_video(video_path, self.collect_duration)
-                    self.set_current_label(ex_label, movement_num + 1)
-
-                    while self.video_playing or (self.paused and not self.stopped):
-                        time.sleep(self.timer_interval / 1000)
-
-                    if self.stopped:
-                        break
-
-                    # Rest
-                    if self.current_rep != self.num_reps:
-                        QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                                    Q_ARG(str, "Resting before repetition {}...".format(self.current_rep + 1)))
-                        QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                                 Q_ARG(str, "font-weight: bold; font-size: 18pt; color: orange;"))
-                        self.play_video(video_path, self.rest_duration)
-                        self.current_label = 0
-
-                        while self.video_playing or (self.paused and not self.stopped):
-                            time.sleep(self.timer_interval / 1000)
-                    else:
-                        self.current_label = None
-
-                    if self.stopped:
-                        break
+        prep_layout.addWidget(self.movements_selected, 2, 5, 2, 1)
 
         #
-        # If user pressed stop
+        # Preparation Phase formatting
         #
-        if self.stopped:
-            self.update.workerStopped.emit()
-        self.complete = True
+        prep_layout.setRowStretch(0, 3)
+        prep_layout.setRowStretch(1, 1)
+        prep_layout.setRowStretch(2, 4)
+        prep_layout.setRowStretch(3, 4)
 
-    def play_video(self, video_path, period):
-        """
-            Prepare video for playback, media_status_changed is called when loading finishes.
+        prep_layout.setColumnStretch(0, 1)
+        prep_layout.setColumnStretch(1, 3)
+        prep_layout.setColumnStretch(2, 1)
+        prep_layout.setColumnStretch(3, 6)
+        prep_layout.setColumnStretch(4, 1)
+        prep_layout.setColumnStretch(5, 6)
 
-        :param video_path: Path to video
-        :param period: Time to play video
-        """
-        self.video_playing = True
-        self.state_time_remain = period
-        abs_path = QFileInfo(video_path).absoluteFilePath()
-        QMetaObject.invokeMethod(self.video_player, "setMedia", Qt.QueuedConnection,
-                                 Q_ARG(QMediaContent, QMediaContent(QUrl.fromLocalFile(abs_path))))
+        #
+        # Start button
+        #
+        self.start_button = QPushButton("Start Online Training")
+        self.start_button.setStyleSheet("font-weight: bold;")
+        self.start_button.clicked.connect(self.on_start_button)
+        self.start_button.setEnabled(False)
+        button_layout = QHBoxLayout()
+        button_layout.addWidget(QWidget())
+        button_layout.addWidget(self.start_button)
+        button_layout.addWidget(QWidget())
+        button_layout.setStretch(0, 20)
+        button_layout.setStretch(1, 45)
+        button_layout.setStretch(2, 20)
+        self.top_layout.addLayout(button_layout)
 
-    def media_status_changed(self, state):
-        """
-            This function is called when the media player's media finishes loading/playing/etc.
-        :param state: State corresponding to media player update
-        """
-        if state == self.MediaStatus.LoadedMedia.value:
-            QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
-            self.timer.start(self.timer_interval)
-        elif state == self.MediaStatus.EndOfMedia.value:
-            if self.state_time_remain > self.timer_interval / 1000:
-                QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+        #
+        # Overall formatting
+        #
+        self.top_layout.setStretch(0, 1)
+        self.top_layout.setStretch(1, 15)
+        self.top_layout.setStretch(2, 1)
+        self.top_layout.setStretch(3, 1)
+
+        self.setLayout(self.top_layout)
+
+    def on_movements_selected(self):
+        self.move_select.show()
 
     def timer_update(self):
         """
             This function is called every "self.timer_interval" seconds, upon timer completion.
         """
-        self.state_time_remain = max(0, self.state_time_remain - self.timer_interval / 1000)
+        time_remaining                      =  max(0, self.pred_worker.state_time_remain  -
+                                                        self.pred_worker.timer_interval / 1000)
+        self.pred_worker.state_time_remain  = time_remaining
 
-        QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                 Q_ARG(str, "{}s ({} / {})".format("{0:.1f}".format(self.state_time_remain),
-                                                           self.current_rep, self.num_reps)))
+        self.progress_label.setText("{}s".format("{0:.1f}".format(time_remaining)))
+        self.progress_label.setAlignment(Qt.AlignCenter)
 
-        if self.state_time_remain == 0:
+        if self.pred_worker.state_time_remain == 0:
             self.timer.stop()
-            self.state_end_event.stateEnded.emit()
+            self.pred_worker.stop_state()
 
-    def set_current_label(self, ex_label, movement_num):
-        """
-            Computes the ground truth label
-        :param ex_label: [str] Exercise "A/B/C"
-        :param movement_num: [int] Movement number
-        """
-        if ex_label == "A":
-            self.current_label = movement_num
-        elif ex_label == "B":
-            self.current_label = movement_num + self.num_class_A
+
+    def device_connected(self, address, rssi, battery):
+
+        new_device = self.MyoConnectedWidget(address, rssi, battery)
+        temp_widget = QListWidgetItem()
+        temp_widget.setBackground(Qt.gray)
+        size_hint = new_device.sizeHint()
+        size_hint.setHeight(36)
+        temp_widget.setSizeHint(size_hint)
+        self.devices_connected.addItem(temp_widget)
+        self.devices_connected.setItemWidget(temp_widget, new_device)
+
+        # Check if ready to start online testing
+        self.check_ready_to_start()
+
+    def device_disconnected(self, address):
+
+        num_widgets = self.devices_connected.count()
+
+        for idx in range(num_widgets):
+            # Ignore port widgets (only interested in Myo device rows)
+            list_widget = self.devices_connected.item(idx)
+            myo_widget  = self.devices_connected.itemWidget(list_widget)
+
+            if myo_widget.address.endswith(address):
+                self.devices_connected.takeItem(idx)
+                break
+
+        # Check if ready to start online testing
+        self.check_ready_to_start()
+
+    def enable_train_buttons(self, select_model, movements_button):
+        self.model_button.setEnabled(select_model)
+        self.movements_button.setEnabled(movements_button)
+
+    def on_model_select(self):
+
+        self.enable_pred_buttons(False, False)
+        dialog              = QFileDialog()
+        self.model_file     = dialog.getOpenFileName(self, 'Choose Model')[0]
+
+        if len(self.model_file) == 0:
+            self.enable_pred_buttons(True, True)
+            return
+
+        # Clear states
+        self.valid_model    = False
+        self.samples_field.setText("")
+        self.model_name.setText("")
+        self.classifier_model = None
+
+        try:
+            with open(self.model_file, 'rb') as f:
+                self.classifier_model = pickle.load(f)
+        except:
+            self.warn_user("Pickle was unable to decode the selected file.")
+            self.enable_pred_buttons(True, True)
+            return
+
+        valid_model = hasattr(self.classifier_model, "perform_inference")
+        if not valid_model:
+            self.warn_user("Invalid model selected, no \"perform_inferfence\" member available.")
+            self.enable_pred_buttons(True, True)
+            return
+
+        self.valid_model    = True
+        model_name          = self.classifier_model.__class__.__name__
+        feat_name           = self.classifier_model.feat_extractor.__class__.__name__
+        self.model_name.setText(model_name + " - " + feat_name)
+
+        if self.classifier_model.num_samples is None:
+            self.samples_field.setText("N/A")
         else:
-            self.current_label = movement_num + self.num_class_A + self.num_class_B
+            self.samples_field.setText(str(self.classifier_model.num_samples))
+        self.enable_pred_buttons(True, True)
 
-    def stop_state(self):
-        """
-            Upon completion of a repetition/rest/prepation state, this function is called.
-        """
+        # Check if ready to start online testing
+        self.check_ready_to_start()
 
-        QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
-        self.video_playing = False
+    def check_ready_to_start(self):
 
-    def force_stop(self):
-        """
-            GroundTruthHelper calls this function to stop this background worker thread.
-        """
-        self.timer.stop()
-        QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
-        self.video_playing = False
-        self.stopped = True
+        self.status_label.setText("Waiting for Preparation...")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: red;")
 
-    def force_pause(self):
-        """
-            GroundTruthHelper calls this function to pause this background worker thread.
-        """
-        self.timer.stop()
-        QMetaObject.invokeMethod(self.video_player, "pause", Qt.QueuedConnection)
-        self.paused = True
+        # Need two (connected) devices
+        if self.devices_connected.count() < 2:
+            self.start_button.setEnabled(False)
+            return
 
-        # Re-enable video buttons
-        self.update.workerPaused.emit()
+        # Need noise model
+        if not self.noise_model_ready:
+            self.start_button.setEnabled(False)
+            return
 
-    def force_unpause(self):
-        """
-            GroundTruthHelper calls this function to unpause this background worker thread.
-        """
-        self.timer.start(self.timer_interval)
-        QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
-        self.paused = False
+        # Need prediction model
+        if not self.valid_model:
+            self.start_button.setEnabled(False)
+            return
 
-        # Re-enable video buttons
-        self.update.workerUnpaused.emit()
+        self.start_button.setEnabled(True)
+        self.status_label.setText("Waiting to Start...")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: green;")
+
+    def enable_control_buttons(self, enable_start, enable_pause, enable_stop):
+        self.controls_start.setEnabled(enable_start)
+        self.controls_pause.setEnabled(enable_pause)
+        self.controls_stop.setEnabled(enable_stop)
+
+    def on_start_button(self):
+
+        control_box_idx = 1
+        self.bottom_panel.setCurrentIndex(control_box_idx)
+        self.enable_control_buttons(False, False, False)
+
+        # Hide start button
+        self.start_button.hide()
+        self.top_layout.setStretch(3, 0)
+
+        self.status_label.setText("Waiting for Movement...")
+        self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: orange;")
+
+        # Adjust size of bottom panel
+        self.parameters_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.controls_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.controls_box.adjustSize()
+        self.parameters_box.adjustSize()
+        self.bottom_panel.adjustSize()
+
+        # Start background worker, reponsible for gesture detection
+        self.pred_worker = GesturePredictionWorker(self.myo_data, self.noise_worker.smooth_avg,
+                                                    self.noise_worker.smooth_std, self.classifier_model,
+                                                    self.status_label, self.progress_label, self.desc_title,
+                                                    self.desc_explain, self.video_player, self.enable_control_buttons,
+                                                    self.controls_start, self.controls_pause, self.controls_stop,
+                                                    self.timer, self.close_prediction_worker
+                                                   )
+        QThreadPool.globalInstance().start(self.pred_worker)
+
+    def close_prediction_worker(self):
+        control_box_idx = 0
+        self.bottom_panel.setCurrentIndex(control_box_idx)
+
+        # Hide start button
+        self.start_button.show()
+        self.top_layout.setStretch(3, 1)
+
+        # Adjust size of bottom panel
+        self.parameters_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self.controls_box.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Ignored)
+        self.controls_box.adjustSize()
+        self.parameters_box.adjustSize()
+        self.bottom_panel.adjustSize()
+
+    def warn_user(self, message):
+        """
+            Generates a pop-up warning message
+
+        :param message: The text to display
+        """
+        self.warning = QErrorMessage()
+        self.warning.showMessage(message)
+        self.warning.show()
+
+
+class GesturePredictionWorker(QRunnable):
+
+        # Qt5, QMediaPlayer enum
+        # > "Defines the status of a media player's current media."
+        class MediaStatus(Enum):
+            UnknownMediaStatus = 0
+            NoMedia = 1
+            LoadingMedia = 2
+            LoadedMedia = 3
+            StalledMedia = 4
+            BufferingMedia = 5
+            BufferedMedia = 6
+            EndOfMedia = 7
+            InvalidMedia = 8
+
+        class GPWSignal(QObject):
+            onShutdown = pyqtSignal()
+
+        def __init__(self, myo_data, smooth_avg, smooth_std, pred_model, status_label, progress_label, desc_title,
+                        desc_explain, video_player, enable_control_buttons, controls_start, controls_pause,
+                        controls_stop, timer, close_prediction):
+            super().__init__()
+
+            self.myo_data               = myo_data
+            self.smooth_avg             = smooth_avg
+            self.smooth_std             = smooth_std
+            self.pred_model             = pred_model
+            self.status_label           = status_label
+            self.progress_label         = progress_label
+            self.desc_title             = desc_title
+            self.desc_explain           = desc_explain
+            self.video_player           = video_player
+
+            self.enable_control_buttons = enable_control_buttons
+            self.controls_start         = controls_start
+            self.controls_start.clicked.connect(self.start_online_pred)
+            self.controls_pause         = controls_pause
+            self.controls_pause.clicked.connect(self.pause_online_pred)
+            self.controls_stop          = controls_stop
+            self.controls_stop.clicked.connect(self.stop_online_pred)
+            self.timer                  = timer
+
+            self.close_event            = self.GPWSignal()
+            self.close_event.onShutdown.connect(close_prediction)
+
+            # Each video path has the following format:
+            #   -> (1, 2, 3):
+            #       1: Path relative to video_dir
+            #       2: Minimum video number in specified path
+            #       3. Maximum video number in specified path
+            #
+            self.video_dir              = "gesture_videos"
+            self.video_path_template    = [
+                                            ("arrows/exercise_a/a{}.mp4", 12),
+                                            ("arrows/exercise_b/b{}.mp4", 17),
+                                            ("arrows/exercise_c/c{}.mp4", 23)
+                                        ]
+
+            # Configurable parameters (threshold algorithm)
+            self.window_size        = 50
+            self.h                  = 3     # Number of standard deviations to threshold with
+            self.min_rest_samples   = 80   # Must meet threshold this many times
+            self.min_sig_samples    = 200   # Must meet threshold this many times
+            self.max_err            = 15    # Up to this many samples can fail to meet this threshold
+
+            # Other configurable parameters
+            self.max_samples    = 600   # 3 seconds
+            self.trim_samples   = 200
+            self.detect_window  = 400 / 1000
+            self.check_period   = 50 / 1000
+            self.setup_time     = 2000 / 1000
+            self.wait_period    = 1000 / 1000  # Wait for movement signal to die out
+            self.min_duration   = 2000 / 1000
+            self.max_duration   = 5000 / 1000
+            self.emg_rate       = 200
+            self.rest_label     = 0
+            self.use_imu        = False
+
+            # States
+            self.cur_count      = 0
+            self.err_count      = 0
+            self.running        = False
+            self.emg_list       = []
+            self.acc_list       = []
+            self.gyro_list      = []
+            self.mag_list       = []
+            self.last_end_idx   = None
+            self.playing        = False
+            self.started        = False
+
+
+            #
+            # Video playing specific
+            #
+            ############################################################################################################
+            ############################################################################################################
+            self.num_exercise_A = 12
+            self.num_exercise_B = 17
+
+            # Configurable parameters
+            self.display_period = 10.0  # Used to update time remaining
+            self.timer_interval = 100   # units of ms
+            self.post_display_exit = 100/1000 # units of secods
+
+            # State variables
+            self.state_time_remain  = 0  # seconds
+            self.video_playing      = False
+            self.stopped            = False
+            self.current_label      = None
+            self.complete           = False
+            self.paused             = False
+            self.pausing            = False
+            self.unpausing          = False
+            self.shutdown           = False
+
+            self.video_player.mediaStatusChanged.connect(self.media_status_changed)
+            ############################################################################################################
+            ############################################################################################################
+
+        def check_video_paths(self):
+            """
+                Determines if an exercise has all videos necessary for playback, upon pressing "Start".
+
+            :return: [bool, bool, bool]
+
+                    > Where each bool determines if exercise A/B/C has all videos available.
+            """
+
+            exercises_found         = [True, True, True]
+            self.all_video_paths    = [("A", []), ("B", []), ("C", [])]
+
+            def create_exercise_paths(self, ex_label):
+                ex_index = ord(ex_label) - ord('A')
+                found_videos = True
+                path_template   = join(self.video_dir, self.video_path_template[ex_index][0])
+                max_idx         = self.video_path_template[ex_index][1]
+                ex_path_created = []
+
+                for i in range(1, max_idx + 1):
+                    full_path = path_template.format(i)
+                    ex_path_created.append(full_path)
+
+                    if not exists(full_path):
+                        found_videos = False
+                        break
+
+                self.all_video_paths[ex_index][1].extend(ex_path_created)
+                return found_videos
+
+            exercises_found[0] = create_exercise_paths(self, "A")
+            exercises_found[1] = create_exercise_paths(self, "B")
+            exercises_found[2] = create_exercise_paths(self, "C")
+
+            return exercises_found
+
+        def detect_movement(self, detect_start):
+
+            #
+            # Extract data in time window
+            #
+            first_myo_data  = self.myo_data.band_1
+            second_myo_data = self.myo_data.band_2
+            data_mapping    = self.myo_data.data_mapping
+
+            # Find start/end indices of first dataset
+            first_end_idx   = len(first_myo_data.timestamps) - 1
+
+            # Skip seen samples
+            if self.last_end_idx is not None:
+                new_emg_count   = first_end_idx - self.last_end_idx
+                first_start_idx = self.last_end_idx + 1
+
+            # Get all samples within "detection window"
+            else:
+                start_time      = time.time()
+                idx             = first_end_idx
+                first_start_idx = None
+
+                while first_start_idx is None:
+                    data_time = first_myo_data.timestamps[idx]
+
+                    if (start_time - data_time > self.detect_window + 2 * COPY_THRESHOLD):
+                        first_start_idx = idx
+                    else:
+                        idx -= 1
+
+                #self.very_first = first_start_idx
+                new_emg_count   = first_end_idx - first_start_idx + 1
+
+            # Add new emg\imu samples:
+            for first_idx in range(first_start_idx, first_end_idx + 1):
+                sec_idx = data_mapping[first_idx]
+
+                if (sec_idx != self.myo_data.invalid_map) and (sec_idx < len(second_myo_data.timestamps)):
+                    # EMG
+                    first_emg   = [x[first_idx] for x in first_myo_data.emg]
+                    second_emg  = [x[sec_idx] for x in second_myo_data.emg]
+                    self.emg_list.append(first_emg + second_emg)
+
+                    if self.use_imu:
+                        # ACC
+                        first_acc   = [x[first_idx] for x in first_myo_data.accel]
+                        second_acc  = [x[sec_idx] for x in second_myo_data.accel]
+                        self.acc_list.append(first_acc + second_acc)
+
+                        # GYRO
+                        first_gyro   = [x[first_idx] for x in first_myo_data.gyro]
+                        second_gyro  = [x[sec_idx] for x in second_myo_data.gyro]
+                        self.gyro_list.append(first_gyro + second_gyro)
+
+                        # MAG
+                        first_mag   = [x[first_idx] for x in first_myo_data.orient]
+                        second_mag  = [x[sec_idx] for x in second_myo_data.orient]
+                        self.mag_list.append(first_mag + second_mag)
+
+            emg_samples = np.array(self.emg_list)
+
+            # Apply sixth-order digital butterworth lowpass filter with 50 Hz cutoff frequency to rectified signal (first)
+            fs          = 200
+            nyquist     = 0.5 * fs
+            cutoff      = 50
+            order       = 6
+            b, a        = butter(order, cutoff / nyquist, btype='lowpass')
+            emg_samples = np.abs(emg_samples)
+            filt_data   = lfilter(b, a, emg_samples, axis=0)
+
+            ##########################################################################################################################################################################
+            ##########################################################################################################################################################################
+            ##########################################################################################################################################################################
+            ##########################################################################################################################################################################
+
+            #
+            # Use test function to determine onset of signal (for current channel)
+            #
+            max_idx         = emg_samples.shape[0] - 1
+            emg_start_idx   = None
+            max_count       = 0
+
+            if self.last_end_idx is None:
+                cur_idx = self.window_size
+            else:
+                cur_idx = max_idx - new_emg_count + 1
+
+            if detect_start:
+                min_samples = self.min_sig_samples
+            else:
+                min_samples = self.min_rest_samples
+
+            while (emg_start_idx is None) and (cur_idx <= max_idx):
+
+                # Test for non-noise data
+                cur_test_func = (np.mean(filt_data[cur_idx - self.window_size: cur_idx],
+                                         axis=0) - self.smooth_avg) / self.smooth_std
+
+                success = np.any(np.greater(cur_test_func, self.h))
+                if not detect_start:
+                    success = not success
+
+                # Keeps track of number of successes and failures
+                if success:
+                    self.cur_count += 1
+                else:
+                    self.err_count += 1
+
+                if self.err_count >= self.max_err:
+                    self.err_count = 0
+                    self.cur_count = 0
+
+                if (self.cur_count + self.err_count) > max_count:
+                    max_count = (self.cur_count + self.err_count)
+
+                if max_count >= min_samples:
+                    emg_start_idx = cur_idx - min_samples + 1
+                else:
+                    cur_idx += 1
+
+            #print((self.cur_count, new_emg_count))
+            self.last_end_idx = first_end_idx
+
+            if emg_start_idx is not None:
+                self.cur_count = 0
+                self.err_count = 0
+                return emg_start_idx
+
+            return None
+
+        def run(self):
+
+            #
+            # Check if all videos exist
+            #
+            exercises_found = self.check_video_paths()
+
+            def missing_exer(self, ex_found, ex_label):
+                if not ex_found:
+                    # Re-enable video buttons
+                    self.enable_control_buttons(True, False, True)
+
+                    # Display warning
+                    self.warning = QErrorMessage()
+                    self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
+                    self.warning.show()
+                return ex_found
+
+            if ((not missing_exer(self, exercises_found[0], "A")) or (not missing_exer(self, exercises_found[1], "B"))
+                    or (not missing_exer(self, exercises_found[2], "C"))):
+                return
+
+            self.running = True
+            time.sleep(self.setup_time)
+            self.enable_control_buttons(False, False, False)
+
+            while self.running:
+
+                start_idx = self.detect_movement(True)
+                if start_idx is None:
+                    #
+                    # Trim EMG data
+                    #
+                    # if len(self.emg_list) > self.max_samples:
+                    #    self.emg_list = self.emg_list[self.trim_samples:]
+
+                    time.sleep(self.check_period)
+                else:
+                    print("START")
+                    #time.sleep(self.wait_period)
+
+                    end_idx = None
+                    while (end_idx is None) and (self.running):
+
+                        end_idx = self.detect_movement(False)
+                        if end_idx is None:
+                            time.sleep(self.check_period)
+                        else:
+                            print("END")
+
+                    if not self.running:
+                        break
+
+                    #
+                    # Refine signal onset (using likelihood test)
+                    #
+
+                    emg_samples = np.array(self.emg_list)
+                    with open("temparray2", "wb") as f:
+                        np.save(f, emg_samples)
+
+                    #
+                    # Trim excess data on the end
+                    #
+                    num_samples = end_idx - start_idx
+
+                    if num_samples > 550:
+                        print("Num samples:")
+                        print((num_samples, len(self.emg_list)))
+
+                        #
+                        # Refine start/end
+                        #
+                        best_start, best_end = optimize_start_end(self.emg_list, start_idx, end_idx)
+
+                        if ((best_start is not None) and (best_end is not None)) and (best_end - best_start > 400):
+                            with open("temparray", "wb") as f:
+                                np.save(f, np.array(self.emg_list[best_start: best_end]))
+
+                            print("BEST")
+                            print(best_start, best_end)
+
+                            if (best_start is not None) and (best_end is not None):
+                                emg_samp   = np.array(self.emg_list[best_start: best_end])
+
+                                if self.use_imu:
+                                    acc_samp   = np.array(self.acc_list[best_start: best_end])
+                                    gyro_samp  = np.array(self.gyro_list[best_start: best_end])
+                                    mag_samp   = np.array(self.mag_list[best_start: best_end])
+                                    combined_samples = [emg_samp, acc_samp, gyro_samp, mag_samp]
+
+                                if not self.running:
+                                    break
+
+                                #
+                                # Make a prediction
+                                #
+                                if self.use_imu:
+                                    test_feat   = self.pred_model.feat_extractor.extract_feature_point(combined_samples).reshape(1, -1)
+                                else:
+                                    test_feat   = self.pred_model.feat_extractor.extract_feature_point(emg_samp).reshape(1, -1)
+                                pred        = self.pred_model.perform_inference(test_feat, None)[0]
+                                print("The pred:")
+                                print(pred)
+                                prob = self.pred_model.get_class_probabilities(test_feat)
+                                print(prob[0][np.argmax(prob)])
+                                print(np.sort(prob[0])[48:])
+
+                                if pred != self.rest_label:
+
+                                    if not self.running:
+                                        break
+
+                                    #
+                                    # Start playing videos, and updating text fields, via background thread
+                                    #
+                                    self.set_label(pred)
+                                    self.display_prediction()
+                                    time.sleep(self.post_display_exit)
+                                    print("Done")
+                                #with open("temparray", "wb") as f:
+                                #    np.save(f, emg_samples)
+                                #return
+
+                    #
+                    #
+                    # #
+                    # # Clear states
+                    # #
+                    self.emg_list.clear()
+                    self.acc_list.clear()
+                    self.gyro_list.clear()
+                    self.mag_list.clear()
+                    self.last_end_idx = None
+
+
+
+        ################################################################################################################
+        ################################################################################################################
+        ################################################################################################################
+        #
+        # Video playing functions
+        #
+        ################################################################################################################
+        ################################################################################################################
+        ################################################################################################################
+
+
+        def start_online_pred(self):
+            # Disable play/pause/stop buttons until it is safe
+            self.enable_control_buttons(False, False, False)
+
+            # If any button click is still being processed
+            if (self.unpausing) or (self.pausing) or (self.shutdown):
+                return
+
+            if self.playing:
+                self.enable_control_buttons(False, True, True)
+                return
+
+            if self.paused:
+                self.force_unpause()
+                return
+
+            self.run()
+
+        def pause_online_pred(self):
+            """
+                This function is called when the user presses "Pause".
+                    > The background worker pauses the playback of video, and updating of text fields.
+                    > The ground truth labels also become invalid.
+            """
+            if (not self.playing) or (self.pausing) or (self.shutdown):
+                return
+            self.enable_control_buttons(False, False, False)
+            self.pausing = True
+
+            # Pause the background worker
+            self.force_pause()
+
+        def stop_online_pred(self):
+            """
+                This function is called when the user presses "Stop".
+                    > The background worker finishes executing the run() function as a result of being "stopped".
+            """
+            if (not self.playing) or (self.shutdown):
+                return
+            self.enable_control_buttons(False, False, False)
+            self.shutdown = True
+
+            # Force the background worker to leave run()
+            self.force_stop()
+
+        def on_worker_started(self):
+            """
+                This function is called when the background worker has started.
+            """
+            self.started = True
+            self.playing = True
+            self.enable_control_buttons(False, True, True)
+
+        def on_worker_unpaused(self):
+            """
+                 This function is called when the background worker has unpaused.
+             """
+            self.playing = True
+            self.enable_control_buttons(False, True, True)
+            self.unpausing = False
+
+        def on_worker_paused(self):
+            """
+                This function is called when the background worker has paused.
+            """
+            self.playing = False
+            self.pausing = False
+            self.enable_control_buttons(True, False, True)
+
+        def on_worker_stopped(self):
+            """
+                This function is called when the background worker has finished execution of run().
+            """
+            self.playing    = False
+
+            # Stop video player
+            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+
+            # Update GUI appearance
+            QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "0.0s"))
+            QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "No Movement"))
+            QMetaObject.invokeMethod(self.desc_explain, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "No description available."))
+
+
+            if not self.shutdown:
+                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                         Q_ARG(str, "Waiting for Movement..."))
+                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                         Q_ARG(str, "font-weight: bold; font-size: 16pt; color: orange;"))
+
+                self.enable_control_buttons(False, True, True)
+            else:
+                self.running = False
+                self.enable_control_buttons(False, False, False)
+
+                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                         Q_ARG(str, "Waiting to Start..."))
+                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                         Q_ARG(str, " font-weight: bold; font-size: 18pt; "
+                                                    "   color: green;"))
+
+                self.close_event.onShutdown.emit()
+
+        def play_video(self, video_path, period):
+            """
+                Prepare video for playback, media_status_changed is called when loading finishes.
+
+            :param video_path: Path to video
+            :param period: Time to play video
+            """
+            self.video_playing = True
+            self.state_time_remain = period
+            abs_path = QFileInfo(video_path).absoluteFilePath()
+            QMetaObject.invokeMethod(self.video_player, "setMedia", Qt.QueuedConnection,
+                                     Q_ARG(QMediaContent, QMediaContent(QUrl.fromLocalFile(abs_path))))
+
+
+        def media_status_changed(self, state):
+            """
+                This function is called when the media player's media finishes loading/playing/etc.
+            :param state: State corresponding to media player update
+            """
+            if self.video_playing:
+                if state == self.MediaStatus.LoadedMedia.value:
+                    QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+                    QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
+                elif state == self.MediaStatus.EndOfMedia.value:
+                    if self.state_time_remain > self.timer_interval / 1000:
+                        QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+
+        def stop_state(self):
+            """
+                Upon completion of a repetition/rest/prepation state, this function is called.
+            """
+            self.video_playing = False
+            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+
+
+        def force_stop(self):
+            """
+                GroundTruthHelper calls this function to stop this background worker thread.
+            """
+            QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
+            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+            self.video_playing  = False
+            self.stopped        = True
+
+
+        def force_pause(self):
+            """
+                GroundTruthHelper calls this function to pause this background worker thread.
+            """
+            QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
+            QMetaObject.invokeMethod(self.video_player, "pause", Qt.QueuedConnection)
+            self.paused = True
+
+            # Re-enable video buttons
+            self.on_worker_paused()
+
+
+        def force_unpause(self):
+            """
+                GroundTruthHelper calls this function to unpause this background worker thread.
+            """
+            QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
+            QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+            self.paused = False
+
+            # Re-enable video buttons
+            self.on_worker_unpaused()
+
+        def set_label(self, cur_label):
+            #
+            # Obtain movement number & exercise
+            #
+            if cur_label > self.num_exercise_A:
+
+                if cur_label > self.num_exercise_A + self.num_exercise_B:
+                    self.cur_ex = "C"
+                    self.movement_num = cur_label - self.num_exercise_B - self.num_exercise_A
+
+                else:
+                    self.cur_ex = "B"
+                    self.movement_num = cur_label - self.num_exercise_A
+            else:
+                self.movement_num = cur_label
+                self.cur_ex = "A"
+
+
+        def display_prediction(self):
+            # Re-enable video buttons
+            self.complete = False
+            self.on_worker_started()
+
+            #
+            # Setup for current movement
+            #
+            QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "{} s".format(self.display_period)))
+
+            current_description = MOVEMENT_DESC[self.cur_ex][self.movement_num]
+            QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, current_description[0]))
+            QMetaObject.invokeMethod(self.desc_explain, "setText",
+                                     Qt.QueuedConnection, Q_ARG(str, current_description[1]))
+
+            #
+            # Preparation period
+            #
+            QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "Prediction made."))
+            QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                     Q_ARG(str, "font-weight: bold; font-size: 18pt; color: blue;"))
+
+            for ex_vids in self.all_video_paths:
+                if ex_vids[0] == self.cur_ex:
+                    video_path = ex_vids[1][self.movement_num - 1]
+                    break
+
+            self.play_video(video_path, self.display_period)
+
+            while self.video_playing or (self.paused and not self.stopped):
+                time.sleep(self.timer_interval / 1000)
+
+            #
+            # If user pressed stop
+            #
+            self.complete = True
+            self.on_worker_stopped()
+
+        ################################################################################################################
+        ################################################################################################################
+        ################################################################################################################
+

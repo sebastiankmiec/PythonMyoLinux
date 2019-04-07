@@ -87,9 +87,9 @@ class TopLevel(QWidget):
         self.tool_tabs.currentChanged.connect(self.on_tab_changed)
         self.cur_index = 0
 
-        self.online_training_tab    = OnlineTraining()
         self.data_tools_tab         = DataTools(self.on_device_connected, self.on_device_disconnected,
                                                     self.is_data_tools_open)
+        self.online_training_tab    = OnlineTraining(self.data_tools_tab.data_collected)
         self.online_pred_tab        = OnlineTesting(self.data_tools_tab.data_collected)
 
         self.tool_tabs.addTab(self.data_tools_tab, "Data Collection")
@@ -158,19 +158,22 @@ class TopLevel(QWidget):
                 if not worker_running:
 
                     # Close the background video worker if appropriate
-                    if not self.data_tools_tab.gt_helper_open:
-                        if not (self.data_tools_tab.gt_helper.worker is None):
-                            self.data_tools_tab.gt_helper.stop_videos()
+                    # if not self.data_tools_tab.gt_helper_open:
+                    #     if not (self.data_tools_tab.gt_helper.worker is None):
+                    #         self.data_tools_tab.gt_helper.stop_videos()
+                    #
+                    #         while not (self.data_tools_tab.gt_helper.worker.complete):
+                    #             time.sleep(self.worker_check_period)
+                    #
+                    #     #
+                    #     # IF we make it here, the switch is valid (for the case of the data tools tab)
+                    #     #
+                    #     valid_switch = True
+                    # else:
+                    #     self.warn_user("Please close GT Helper first.")
 
-                            while not (self.data_tools_tab.gt_helper.worker.complete):
-                                time.sleep(self.worker_check_period)
+                    valid_switch = True
 
-                        #
-                        # IF we make it here, the switch is valid (for the case of the data tools tab)
-                        #
-                        valid_switch = True
-                    else:
-                        self.warn_user("Please close GT Helper first.")
                 else:
                     self.warn_user("Please close connection to Myo devices first.")
             else:
