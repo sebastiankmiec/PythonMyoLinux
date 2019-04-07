@@ -1,16 +1,15 @@
 #
 # PyQt5 imports
 #
-from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QTabWidget, QFileDialog, QMessageBox,
-                             QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
-                             QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar,
-                             QSpacerItem, QStackedWidget, QTableWidget, QTableWidgetItem, QHeaderView)
+from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QFileDialog, QWidget, QLabel, QHBoxLayout,
+                                QVBoxLayout, QFrame, QMainWindow, QPushButton, QGridLayout, QSizePolicy, QGroupBox,
+                                QTextEdit, QLineEdit, QErrorMessage, QProgressBar, QStackedWidget, QTableWidget,
+                                QTableWidgetItem, QHeaderView)
 
 from PyQt5.QtGui import QPixmap, QIcon, QFont
 from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl,\
                             QFileInfo)
 from PyQt5.QtMultimediaWidgets import QVideoWidget
-import pyqtgraph as pg
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 
 
@@ -31,25 +30,25 @@ except:
 #
 # Miscellaneous imports
 #
-import threading
 from enum import Enum
 import time
-from functools import partial
 from os.path import curdir, exists, join, abspath
-import copy
-from serial.tools.list_ports import comports
-import copy
 
 #
 # Submodules in this repository
 #
-from pymyolinux import MyoDongle
 from movements import *
 from param import *
 
 class OnlineTesting(QWidget):
+    """
+        A GUI tab that allows for real-time predictions to be made on incoming data.
+    """
 
     class PredictionsVisualizer(QMainWindow):
+        """
+            A window that visualizes the top K predictions, among other stats.
+        """
 
         def __init__(self):
             super().__init__()
@@ -60,12 +59,12 @@ class OnlineTesting(QWidget):
             self.all_screenshot_paths       = [("A", []), ("B", []), ("C", [])]
             self.screenshots_dir            = "gesture_screenshots"
             self.screenshot_path_template   = [
-                ("exercise_a/a{}.jpg", 12),
-                ("exercise_b/b{}.jpg", 17),
-                ("exercise_c/c{}.jpg", 23)
-            ]
-            self.is_ready  = self.generate_screenshot_paths()
+                                                ("exercise_a/a{}.jpg", 12),
+                                                ("exercise_b/b{}.jpg", 17),
+                                                ("exercise_c/c{}.jpg", 23)
+                                            ]
 
+            self.is_ready       = self.generate_screenshot_paths()
             self.num_exercise_A = 12
             self.num_exercise_B = 17
 
@@ -116,7 +115,6 @@ class OnlineTesting(QWidget):
             self.predictions_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
             self.predictions_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
             self.predictions_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
-            #self.predictions_list.horizontalHeader().setResizeMode(QHeaderView.Stretch)
             self.predictions_list.setHorizontalHeaderLabels(["Screenshot", "Title", "Probability"])
             self.predictions_list.setIconSize(QSize(400, 175))
             self.predictions_list.setContentsMargins(10, 30, 10, 10)
@@ -127,6 +125,12 @@ class OnlineTesting(QWidget):
             top_level_widget.setLayout(top_layout)
 
         def display_predictions(self, prediction_probabilities, num_samples):
+            """
+                Updates the top K prediction visualization window.
+
+            :param prediction_probabilities: Class probabilities associated with a prediction attempt
+            :param num_samples: The number of data samples used to make this prediction
+            """
 
             def acquire_var(self, text, widget_name, func):
                 try:
@@ -148,7 +152,6 @@ class OnlineTesting(QWidget):
 
             # Update "# of samples" field
             self.num_samples.setText(str(num_samples))
-
 
             #
             # Update list of predictions
@@ -179,6 +182,7 @@ class OnlineTesting(QWidget):
 
                     cur_probability  = prediction_probabilities[idx]
 
+                    # Create new table entry
                     screenshot_widget   = QTableWidgetItem()
                     screenshot_widget.setTextAlignment(Qt.AlignCenter)
                     if cur_screenshot_path is not None:
@@ -187,6 +191,7 @@ class OnlineTesting(QWidget):
                     else:
                         screenshot_widget.setText("N / A")
 
+                    # Set table entry parameters
                     title_widget        = QTableWidgetItem(cur_title)
                     title_widget.setTextAlignment(Qt.AlignCenter)
                     title_widget.setFont(QFont("Helvetica", 14, QFont.Bold))
@@ -200,6 +205,11 @@ class OnlineTesting(QWidget):
                     list_idx += 1
 
         def generate_screenshot_paths(self):
+            """
+                Generates all screenshot paths from a template
+
+            :return: [bool, bool, bool] : Do all screenshots exist for the ith exercise?
+            """
 
             def create_exercise_paths(self, ex_label):
                 ex_index            = ord(ex_label) - ord('A')
@@ -227,6 +237,11 @@ class OnlineTesting(QWidget):
             return exercises_found
 
         def get_ex_movement(self, current_pred):
+            """
+            :param current_pred: A prediction label (0-52)
+            :return: The exercise label, and movement number
+            """
+
             #
             # Obtain movement number & exercise
             #
@@ -256,29 +271,36 @@ class OnlineTesting(QWidget):
             return None
 
     class MyoConnectedWidget(QWidget):
+        """
+            A widget representing a connected Myo armband device.
+        """
 
         def __init__(self, address, rssi, battery):
+            """
+            :param address: MAC address of Myo armband device
+            :param rssi: Signal strength of connected armband
+            :param battery: Battery level (1-100) of connected armband
+            """
             super().__init__()
             self.address = address
             self.init_ui(address, rssi, battery)
 
         def init_ui(self, address, rssi, battery):
-
             infoLayout = QHBoxLayout()
             infoLayout.setSpacing(5)
 
             # Myo armband icon
-            lbl = QLabel(self)
-            orig = QPixmap(join(abspath(__file__).replace("online_test.py", ""), "icons/myo.png"))
-            new = orig.scaled(QSize(30, 30), Qt.KeepAspectRatio)
+            lbl     = QLabel(self)
+            orig    = QPixmap(join(abspath(__file__).replace("online_test.py", ""), "icons/myo.png"))
+            new     = orig.scaled(QSize(30, 30), Qt.KeepAspectRatio)
             lbl.setPixmap(new)
 
             #
             # Format the Myo hardware (MAC) into a readable form
             #
             infoLayout.addWidget(lbl)
-            formatted_address = ""
-            length = len(address.hex())
+            formatted_address   = ""
+            length              = len(address.hex())
 
             for i, ch in enumerate(address.hex()):
                 formatted_address += ch
@@ -288,24 +310,17 @@ class OnlineTesting(QWidget):
             vline = QFrame()
             vline.setFrameShape(QFrame.VLine)
             vline.setFrameShadow(QFrame.Sunken)
-            # vline2 = QFrame()
-            # vline2.setFrameShape(QFrame.VLine)
-            # vline2.setFrameShadow(QFrame.Sunken)
 
             #
             # Myo armband address, signal strength
             #
-            addr_label = QLabel(formatted_address)
+            addr_label  = QLabel(formatted_address)
             addr_label.setContentsMargins(5, 0, 0, 0)
-            cur_font = addr_label.font()
+            cur_font    = addr_label.font()
             cur_font.setPointSize(10)
             addr_label.setFont(cur_font)
             infoLayout.addWidget(addr_label)
             infoLayout.addWidget(vline)
-            # rssi_label = QLabel(str(rssi) + " dBm")
-            # infoLayout.addWidget(rssi_label)
-            # infoLayout.addWidget(vline2)
-            # infoLayout.setStretchFactor(rssi_label, 3)
             infoLayout.setStretchFactor(addr_label, 4)
 
             #
@@ -317,10 +332,12 @@ class OnlineTesting(QWidget):
             self.battery_level.setValue(battery)
             infoLayout.addWidget(self.battery_level)
             infoLayout.setStretchFactor(self.battery_level, 2)
-
             self.setLayout(infoLayout)
 
     def __init__(self, myo_data):
+        """
+        :param myo_data: All data collected from both Myo armband devices
+        """
         super().__init__()
         self.myo_data = myo_data
 
@@ -350,7 +367,6 @@ class OnlineTesting(QWidget):
 
 
     def init_ui(self):
-
         self.top_layout = QVBoxLayout()
         self.top_layout.setContentsMargins(10, 10, 10, 10)
         self.top_layout.setSpacing(15)
@@ -358,8 +374,8 @@ class OnlineTesting(QWidget):
         #
         # Top "message box" / time remaining
         #
-        message_layout  = QHBoxLayout()
-        self.status_label = QLabel("Waiting for Preparation...")
+        message_layout      = QHBoxLayout()
+        self.status_label   = QLabel("Waiting for Preparation...")
         self.status_label.setStyleSheet(" font-weight: bold; font-size: 16pt; color: red;")
         self.status_label.setAlignment(Qt.AlignCenter)
         self.progress_label = QLineEdit("N/A")
@@ -449,7 +465,7 @@ class OnlineTesting(QWidget):
         self.bottom_panel.setCurrentIndex(0)
         self.bottom_panel.adjustSize()
 
-        controls_layout = QGridLayout()
+        controls_layout     = QGridLayout()
         self.controls_start = QPushButton("Start")
         self.controls_start.setStyleSheet("font-weight: bold")
         self.controls_pause = QPushButton("Pause")
@@ -545,7 +561,7 @@ class OnlineTesting(QWidget):
         #
         # Online Testing Parameters
         #
-        test_title      = QLabel("Test Parameters")
+        test_title = QLabel("Test Parameters")
         test_title.setAlignment(Qt.AlignCenter)
         test_title.setStyleSheet("font-weight: bold")
         prep_layout.addWidget(test_title, 0, 7, 1, 2)
@@ -606,7 +622,6 @@ class OnlineTesting(QWidget):
         self.top_layout.setStretch(1, 15)
         self.top_layout.setStretch(2, 1)
         self.top_layout.setStretch(3, 1)
-
         self.setLayout(self.top_layout)
 
 
@@ -627,7 +642,13 @@ class OnlineTesting(QWidget):
 
 
     def device_connected(self, address, rssi, battery):
+        """
+            Called on user initiated connection
 
+            :param address: MAC address of Myo armband device
+            :param rssi: Signal strength of connected armband
+            :param battery: Battery level (1-100) of connected armband
+        """
         new_device = self.MyoConnectedWidget(address, rssi, battery)
         temp_widget = QListWidgetItem()
         temp_widget.setBackground(Qt.gray)
@@ -641,6 +662,11 @@ class OnlineTesting(QWidget):
         self.check_ready_to_start()
 
     def device_disconnected(self, address):
+        """
+            Called on unexpected or user initiated connection
+
+            :param address: MAC address of Myo armband device
+        """
 
         num_widgets = self.devices_connected.count()
 
@@ -657,10 +683,18 @@ class OnlineTesting(QWidget):
         self.check_ready_to_start()
 
     def enable_pred_buttons(self, select_model, noise_button):
+        """
+        :param select_model: Enable select model button
+        :param noise_button: Enable collect noise button
+        :return:
+        """
         self.model_button.setEnabled(select_model)
         self.noise_button.setEnabled(noise_button)
 
     def on_noise_collect(self):
+        """
+            On press of "Noise Collect" button, begin collecting noise via a background worker
+        """
 
         if self.collecting_noise:
             return self.warn_user("Currently collecting noise data and\or creating a noise model.")
@@ -712,14 +746,23 @@ class OnlineTesting(QWidget):
             QThreadPool.globalInstance().start(self.noise_worker)
 
     def on_worker_started(self):
+        """
+            Called on start of noise data collection worker
+        """
         pass
 
     def on_collect_complete(self):
+        """
+            Called on completion of noise data worker data collection
+        """
         self.status_label.setText("Processing Noise Data...")
         self.progress_label.setText("N/A")
         self.progress_bar.close()
 
     def on_model_ready(self):
+        """
+            Called on completion of noise data worker data processing (model fitting)
+        """
         self.status_label.setText("Waiting for Preparation...")
         self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: red;")
         self.enable_pred_buttons(True, True)
@@ -730,10 +773,13 @@ class OnlineTesting(QWidget):
         self.check_ready_to_start()
 
     def on_model_select(self):
+        """
+            On press of the model select button, allow the user to select a model, and check for validity
+        """
 
         self.enable_pred_buttons(False, False)
-        dialog              = QFileDialog()
-        self.model_file     = dialog.getOpenFileName(self, 'Choose Model')[0]
+        dialog          = QFileDialog()
+        self.model_file = dialog.getOpenFileName(self, 'Choose Model')[0]
 
         if len(self.model_file) == 0:
             self.enable_pred_buttons(True, True)
@@ -774,7 +820,9 @@ class OnlineTesting(QWidget):
         self.check_ready_to_start()
 
     def check_ready_to_start(self):
-
+        """
+            Check if we are ready to start online testing, if so, enable the start button for online testing
+        """
         self.status_label.setText("Waiting for Preparation...")
         self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: red;")
 
@@ -798,6 +846,14 @@ class OnlineTesting(QWidget):
         self.status_label.setStyleSheet("font-weight: bold; font-size: 16pt; color: green;")
 
     def enable_control_buttons(self, enable_start, enable_pause, enable_stop):
+        """
+            Enables/disables online testing buttons
+
+        :param enable_start: Enable online testing start button
+        :param enable_pause: Enable online testing pause button
+        :param enable_stop: Enable online testing stop button
+        :return:
+        """
         self.controls_start.setEnabled(enable_start)
         self.controls_pause.setEnabled(enable_pause)
         self.controls_stop.setEnabled(enable_stop)
@@ -812,8 +868,10 @@ class OnlineTesting(QWidget):
         self.warning.show()
         return None
 
-
     def on_start_button(self):
+        """
+            On press of online testing start button, start background worker to process incoming data (to make predictions)
+        """
 
         #
         # Check test parameters first!
@@ -877,6 +935,9 @@ class OnlineTesting(QWidget):
         QThreadPool.globalInstance().start(self.pred_worker)
 
     def close_prediction_worker(self):
+        """
+            On press of online testing stop button, the background worker stops and this function is called
+        """
         control_box_idx = 0
         self.bottom_panel.setCurrentIndex(control_box_idx)
 
@@ -895,9 +956,11 @@ class OnlineTesting(QWidget):
         self.prediction_visualization.hide()
 
     def worker_prediction(self):
-        #
+        """
+            On a prediction made by a background worker, this function is called
+        """
+
         # Visualize top K predictions
-        #
         self.prediction_visualization.display_predictions(self.pred_worker.class_probabilities,
                                                             self.pred_worker.num_samples_used)
 
@@ -933,9 +996,22 @@ class NoiseUpdates(QObject):
 ########################################################################################################################
 
 class NoiseCollectionWorker(QRunnable):
+    """
+        Collects noise data, processes it, and creates a noise model, used by signal detection.
+    """
 
     def __init__(self, myo_data, noise_duration, noise_increments, progress_bar, progress_label, on_worker_started,
                         on_collect_complete, on_model_ready):
+        """
+        :param myo_data: A MyoData object, holding all data collected from both Myo armbands
+        :param noise_duration: The duration to collect noise data for
+        :param noise_increments: How many increments for the noise collection progress bar
+        :param progress_bar: The noise collection progress bar
+        :param progress_label: A QLineEdit text field, containing the remaining amount of time
+        :param on_worker_started: A function called on the start of noise data collection
+        :param on_collect_complete: A function called on completion of noise data collection
+        :param on_model_ready: A function called on completion of noise model creation
+        """
         super().__init__()
 
         self.myo_data           = myo_data
@@ -963,7 +1039,9 @@ class NoiseCollectionWorker(QRunnable):
         self.noise_cov  = None
 
     def run(self):
-
+        #
+        # Wait for data collection to finish
+        #
         time.sleep(self.buffer_time)
         while (time.time() - self.start_time) < self.noise_duration:
             QMetaObject.invokeMethod(self.progress_bar, "setValue", Qt.QueuedConnection,
@@ -983,10 +1061,6 @@ class NoiseCollectionWorker(QRunnable):
         #
         # Extract data in time window
         #
-
-        # first_myo_data  = copy.deepcopy(self.myo_data.band_1)
-        # second_myo_data = copy.deepcopy(self.myo_data.band_2)
-        # data_mapping    = copy.deepcopy(self.myo_data.data_mapping)
         first_myo_data  = self.myo_data.band_1
         second_myo_data = self.myo_data.band_2
         data_mapping    = self.myo_data.data_mapping
@@ -1019,9 +1093,9 @@ class NoiseCollectionWorker(QRunnable):
         #
         # Fit a noise model
         #
-        noise_samples       = np.array(noise_samples)
-        self.noise_mean     = np.mean(noise_samples, axis=0)
-        self.noise_cov      = np.cov(noise_samples, rowvar=False)
+        noise_samples   = np.array(noise_samples)
+        self.noise_mean = np.mean(noise_samples, axis=0)
+        self.noise_cov  = np.cov(noise_samples, rowvar=False)
 
         # Apply sixth-order digital butterworth lowpass filter with 50 Hz cutoff frequency to rectified signal (first)
         fs              = 200
@@ -1039,711 +1113,726 @@ class NoiseCollectionWorker(QRunnable):
 
 
 class GesturePredictionWorker(QRunnable):
+    """
+        Collects incoming data, detects signal start/end, creates predictions, and visualizes predictions (video, etc)
+    """
 
-        # Qt5, QMediaPlayer enum
-        # > "Defines the status of a media player's current media."
-        class MediaStatus(Enum):
-            UnknownMediaStatus = 0
-            NoMedia = 1
-            LoadingMedia = 2
-            LoadedMedia = 3
-            StalledMedia = 4
-            BufferingMedia = 5
-            BufferedMedia = 6
-            EndOfMedia = 7
-            InvalidMedia = 8
+    #
+    # Qt5, QMediaPlayer enum
+    # > "Defines the status of a media player's current media."
+    class MediaStatus(Enum):
+        UnknownMediaStatus  = 0
+        NoMedia             = 1
+        LoadingMedia        = 2
+        LoadedMedia         = 3
+        StalledMedia        = 4
+        BufferingMedia      = 5
+        BufferedMedia       = 6
+        EndOfMedia          = 7
+        InvalidMedia        = 8
 
-        class GPWSignal(QObject):
-            onShutdown      = pyqtSignal()
-            onPrediction    = pyqtSignal()
+    class GPWSignal(QObject):
+        onShutdown   = pyqtSignal()
+        onPrediction = pyqtSignal()
 
-        def __init__(self, myo_data, smooth_avg, smooth_std, pred_model, status_label, progress_label, desc_title,
-                        desc_explain, video_player, enable_control_buttons, controls_start, controls_pause,
-                        controls_stop, timer, close_prediction, min_duration, max_duration, on_prediction):
-            super().__init__()
+    def __init__(self, myo_data, smooth_avg, smooth_std, pred_model, status_label, progress_label, desc_title,
+                    desc_explain, video_player, enable_control_buttons, controls_start, controls_pause,
+                    controls_stop, timer, close_prediction, min_duration, max_duration, on_prediction):
+        """
 
-            self.myo_data               = myo_data
-            self.smooth_avg             = smooth_avg
-            self.smooth_std             = smooth_std
-            self.pred_model             = pred_model
-            self.status_label           = status_label
-            self.progress_label         = progress_label
-            self.desc_title             = desc_title
-            self.desc_explain           = desc_explain
-            self.video_player           = video_player
+        :param myo_data: A MyoData object containing all data collected from both Myo armband devices
+        :param smooth_avg: The mean across EMG data channels (smoothed, rectified) for noisy/rest movement
+        :param smooth_std: The standard deviation across EMG data channels (smoothed, rectified) for noisy/rest movement
+        :param pred_model: The loaded prediction model (of type ClassifierModel), to make predictions
+        :param status_label: The top-left text field containing the current status of this module
+        :param progress_label: The top-right text field containing the amount of time left
+        :param desc_title: A text field containing a name\title of the movement being performed
+        :param desc_explain: A text field containing a description of the movement being performed
+        :param video_player: A QVideoWidget widget, used to play videos
+        :param enable_control_buttons: A function enabling/disabling online testing start/pause/stop buttons
+        :param controls_start: The online testing start button
+        :param controls_pause: The online testing pause button
+        :param controls_stop: The online testing stop button
+        :param timer: A QTimer object, used to time state updates
+        :param close_prediction: On close of this worker thread, this function is called
+        :param min_duration: The minimum duration acceptable for a prediction
+        :param max_duration: The maximum duration acceptable for a prediction
+        :param on_prediction: A function called on prediction made
+        """
+        super().__init__()
 
-            self.enable_control_buttons = enable_control_buttons
-            self.controls_start         = controls_start
-            self.controls_start.clicked.connect(self.start_online_pred)
-            self.controls_pause         = controls_pause
-            self.controls_pause.clicked.connect(self.pause_online_pred)
-            self.controls_stop          = controls_stop
-            self.controls_stop.clicked.connect(self.stop_online_pred)
-            self.timer                  = timer
+        self.myo_data               = myo_data
+        self.smooth_avg             = smooth_avg
+        self.smooth_std             = smooth_std
+        self.pred_model             = pred_model
+        self.status_label           = status_label
+        self.progress_label         = progress_label
+        self.desc_title             = desc_title
+        self.desc_explain           = desc_explain
+        self.video_player           = video_player
 
-            self.worker_event           = self.GPWSignal()
-            self.worker_event.onShutdown.connect(close_prediction)
-            self.worker_event.onPrediction.connect(on_prediction)
+        self.enable_control_buttons = enable_control_buttons
+        self.controls_start         = controls_start
+        self.controls_start.clicked.connect(self.start_online_pred)
+        self.controls_pause         = controls_pause
+        self.controls_pause.clicked.connect(self.pause_online_pred)
+        self.controls_stop          = controls_stop
+        self.controls_stop.clicked.connect(self.stop_online_pred)
+        self.timer                  = timer
 
-            self.min_duration           = min_duration
-            self.max_duration           = max_duration
+        self.worker_event           = self.GPWSignal()
+        self.worker_event.onShutdown.connect(close_prediction)
+        self.worker_event.onPrediction.connect(on_prediction)
 
-            # Each video path has the following format:
-            #   -> (1, 2, 3):
-            #       1: Path relative to video_dir
-            #       2: Minimum video number in specified path
-            #       3. Maximum video number in specified path
-            #
-            self.video_dir              = "gesture_videos"
-            self.video_path_template    = [
-                                            ("arrows/exercise_a/a{}.mp4", 12),
-                                            ("arrows/exercise_b/b{}.mp4", 17),
-                                            ("arrows/exercise_c/c{}.mp4", 23)
-                                        ]
+        self.min_duration = min_duration
+        self.max_duration = max_duration
 
-            # Configurable parameters (threshold algorithm)
-            self.window_size        = 50
-            self.h                  = 3     # Number of standard deviations to threshold with
-            self.min_rest_samples   = 80   # Must meet threshold this many times
-            self.min_sig_samples    = 200   # Must meet threshold this many times
-            self.max_err            = 15    # Up to this many samples can fail to meet this threshold
+        # Each video path has the following format:
+        #   -> (1, 2, 3):
+        #       1: Path relative to video_dir
+        #       2: Minimum video number in specified path
+        #       3. Maximum video number in specified path
+        #
+        self.video_dir              = "gesture_videos"
+        self.video_path_template    = [
+                                        ("arrows/exercise_a/a{}.mp4", 12),
+                                        ("arrows/exercise_b/b{}.mp4", 17),
+                                        ("arrows/exercise_c/c{}.mp4", 23)
+                                    ]
 
-            # Other configurable parameters
-            self.max_samples    = 2000   # 5 seconds
-            self.trim_samples   = 200
-            self.detect_window  = 400 / 1000
-            self.check_period   = 50 / 1000
-            self.setup_time     = 2000 / 1000
-            self.wait_period    = 1000 / 1000  # Wait for movement signal to die out
-            self.min_duration   = 2000 / 1000
-            self.max_duration   = 5000 / 1000
-            self.emg_rate       = 200
-            self.rest_label     = 0
-            self.use_imu        = False
+        # Configurable parameters (threshold algorithm)
+        self.window_size        = 50
+        self.h                  = 3     # Number of standard deviations to threshold with
+        self.min_rest_samples   = 80   # Must meet threshold this many times
+        self.min_sig_samples    = 200   # Must meet threshold this many times
+        self.max_err            = 15    # Up to this many samples can fail to meet this threshold
 
-            # States
-            self.cur_count      = 0
-            self.err_count      = 0
-            self.running        = False
-            self.emg_list       = []
-            self.acc_list       = []
-            self.gyro_list      = []
-            self.mag_list       = []
-            self.last_end_idx   = None
-            self.playing        = False
-            self.started        = False
+        # Other configurable parameters
+        self.max_samples    = 2000   # 5 seconds
+        self.trim_samples   = 200
+        self.detect_window  = 400 / 1000
+        self.check_period   = 50 / 1000
+        self.setup_time     = 2000 / 1000
+        self.wait_period    = 1000 / 1000  # Wait for movement signal to die out
+        self.min_duration   = 2000 / 1000
+        self.max_duration   = 5000 / 1000
+        self.emg_rate       = 200
+        self.rest_label     = 0
+        self.use_imu        = False
+
+        # States
+        self.cur_count      = 0
+        self.err_count      = 0
+        self.running        = False
+        self.emg_list       = []
+        self.acc_list       = []
+        self.gyro_list      = []
+        self.mag_list       = []
+        self.last_end_idx   = None
+        self.playing        = False
+        self.started        = False
 
 
-            #
-            # Video playing specific
-            #
-            ############################################################################################################
-            ############################################################################################################
-            self.num_exercise_A = 12
-            self.num_exercise_B = 17
+        #
+        # Video playing specific
+        #
+        ############################################################################################################
+        ############################################################################################################
+        self.num_exercise_A = 12
+        self.num_exercise_B = 17
 
-            # Configurable parameters
-            self.display_period = 10.0  # Used to update time remaining
-            self.timer_interval = 100   # units of ms
-            self.post_display_exit = 100/1000 # units of secods
+        # Configurable parameters
+        self.display_period     = 10.0  # Used to update time remaining
+        self.timer_interval     = 100   # units of ms
+        self.post_display_exit  = 100/1000 # units of secods
 
-            # State variables
-            self.state_time_remain  = 0  # seconds
-            self.video_playing      = False
-            self.stopped            = False
-            self.current_label      = None
-            self.complete           = False
-            self.paused             = False
-            self.pausing            = False
-            self.unpausing          = False
-            self.shutdown           = False
+        # State variables
+        self.state_time_remain  = 0  # seconds
+        self.video_playing      = False
+        self.stopped            = False
+        self.current_label      = None
+        self.complete           = False
+        self.paused             = False
+        self.pausing            = False
+        self.unpausing          = False
+        self.shutdown           = False
 
-            self.video_player.mediaStatusChanged.connect(self.media_status_changed)
-            ############################################################################################################
-            ############################################################################################################
+        self.video_player.mediaStatusChanged.connect(self.media_status_changed)
+        ############################################################################################################
+        ############################################################################################################
 
-        def check_video_paths(self):
-            """
-                Determines if an exercise has all videos necessary for playback, upon pressing "Start".
+    def check_video_paths(self):
+        """
+            Determines if an exercise has all videos necessary for playback, upon pressing "Start".
 
-            :return: [bool, bool, bool]
+        :return: [bool, bool, bool]
 
-                    > Where each bool determines if exercise A/B/C has all videos available.
-            """
+                > Where each bool determines if exercise A/B/C has all videos available.
+        """
 
-            exercises_found         = [True, True, True]
-            self.all_video_paths    = [("A", []), ("B", []), ("C", [])]
+        exercises_found         = [True, True, True]
+        self.all_video_paths    = [("A", []), ("B", []), ("C", [])]
 
-            def create_exercise_paths(self, ex_label):
-                ex_index = ord(ex_label) - ord('A')
-                found_videos = True
-                path_template   = join(self.video_dir, self.video_path_template[ex_index][0])
-                max_idx         = self.video_path_template[ex_index][1]
-                ex_path_created = []
+        def create_exercise_paths(self, ex_label):
+            ex_index = ord(ex_label) - ord('A')
+            found_videos = True
+            path_template   = join(self.video_dir, self.video_path_template[ex_index][0])
+            max_idx         = self.video_path_template[ex_index][1]
+            ex_path_created = []
 
-                for i in range(1, max_idx + 1):
-                    full_path = path_template.format(i)
-                    ex_path_created.append(full_path)
+            for i in range(1, max_idx + 1):
+                full_path = path_template.format(i)
+                ex_path_created.append(full_path)
 
-                    if not exists(full_path):
-                        found_videos = False
-                        break
+                if not exists(full_path):
+                    found_videos = False
+                    break
 
-                self.all_video_paths[ex_index][1].extend(ex_path_created)
-                return found_videos
+            self.all_video_paths[ex_index][1].extend(ex_path_created)
+            return found_videos
 
-            exercises_found[0] = create_exercise_paths(self, "A")
-            exercises_found[1] = create_exercise_paths(self, "B")
-            exercises_found[2] = create_exercise_paths(self, "C")
+        exercises_found[0] = create_exercise_paths(self, "A")
+        exercises_found[1] = create_exercise_paths(self, "B")
+        exercises_found[2] = create_exercise_paths(self, "C")
 
-            return exercises_found
+        return exercises_found
 
-        def detect_movement(self, detect_start):
+    def detect_movement(self, detect_start):
+        """
+            A helper function used to help find the start/end of a signal
 
-            #
-            # Extract data in time window
-            #
-            first_myo_data  = self.myo_data.band_1
-            second_myo_data = self.myo_data.band_2
-            data_mapping    = self.myo_data.data_mapping
+        :param detect_start: True/False: Start/End
 
-            # Find start/end indices of first dataset
-            first_end_idx   = len(first_myo_data.timestamps) - 1
+        :return: None or (start/end) index
+        """
 
-            # Skip seen samples
-            if self.last_end_idx is not None:
-                new_emg_count   = first_end_idx - self.last_end_idx
-                first_start_idx = self.last_end_idx + 1
+        #
+        # Extract data in time window
+        #
+        first_myo_data  = self.myo_data.band_1
+        second_myo_data = self.myo_data.band_2
+        data_mapping    = self.myo_data.data_mapping
 
-            # Get all samples within "detection window"
-            else:
-                start_time      = time.time()
-                idx             = first_end_idx
-                first_start_idx = None
+        # Find start/end indices of first dataset
+        first_end_idx   = len(first_myo_data.timestamps) - 1
 
-                while first_start_idx is None:
-                    data_time = first_myo_data.timestamps[idx]
+        # Skip seen samples
+        if self.last_end_idx is not None:
+            new_emg_count   = first_end_idx - self.last_end_idx
+            first_start_idx = self.last_end_idx + 1
 
-                    if (start_time - data_time > self.detect_window + 2 * COPY_THRESHOLD):
-                        first_start_idx = idx
-                    else:
-                        idx -= 1
+        # Get all samples within "detection window"
+        else:
+            start_time      = time.time()
+            idx             = first_end_idx
+            first_start_idx = None
 
-                #self.very_first = first_start_idx
-                new_emg_count   = first_end_idx - first_start_idx + 1
+            while first_start_idx is None:
+                data_time = first_myo_data.timestamps[idx]
 
-            # Add new emg\imu samples:
-            for first_idx in range(first_start_idx, first_end_idx + 1):
-                sec_idx = data_mapping[first_idx]
-
-                if (sec_idx != self.myo_data.invalid_map) and (sec_idx < len(second_myo_data.timestamps)):
-                    # EMG
-                    first_emg   = [x[first_idx] for x in first_myo_data.emg]
-                    second_emg  = [x[sec_idx] for x in second_myo_data.emg]
-                    self.emg_list.append(first_emg + second_emg)
-
-                    if self.use_imu:
-                        # ACC
-                        first_acc   = [x[first_idx] for x in first_myo_data.accel]
-                        second_acc  = [x[sec_idx] for x in second_myo_data.accel]
-                        self.acc_list.append(first_acc + second_acc)
-
-                        # GYRO
-                        first_gyro   = [x[first_idx] for x in first_myo_data.gyro]
-                        second_gyro  = [x[sec_idx] for x in second_myo_data.gyro]
-                        self.gyro_list.append(first_gyro + second_gyro)
-
-                        # MAG
-                        # first_mag   = [x[first_idx] for x in first_myo_data.orient]
-                        # second_mag  = [x[sec_idx] for x in second_myo_data.orient]
-                        # self.mag_list.append(first_mag + second_mag)
-
-            emg_samples = np.array(self.emg_list)
-
-            # Apply sixth-order digital butterworth lowpass filter with 50 Hz cutoff frequency to rectified signal (first)
-            fs          = 200
-            nyquist     = 0.5 * fs
-            cutoff      = 50
-            order       = 6
-            b, a        = butter(order, cutoff / nyquist, btype='lowpass')
-            emg_samples = np.abs(emg_samples)
-            filt_data   = lfilter(b, a, emg_samples, axis=0)
-
-            ##########################################################################################################################################################################
-            ##########################################################################################################################################################################
-            ##########################################################################################################################################################################
-            ##########################################################################################################################################################################
-
-            #
-            # Use test function to determine onset of signal (for current channel)
-            #
-            max_idx         = emg_samples.shape[0] - 1
-            emg_start_idx   = None
-            max_count       = 0
-
-            if self.last_end_idx is None:
-                cur_idx = self.window_size
-            else:
-                cur_idx = max_idx - new_emg_count + 1
-
-            if detect_start:
-                min_samples = self.min_sig_samples
-            else:
-                min_samples = self.min_rest_samples
-
-            while (emg_start_idx is None) and (cur_idx <= max_idx):
-
-                # Test for non-noise data
-                cur_test_func = (np.mean(filt_data[cur_idx - self.window_size: cur_idx],
-                                         axis=0) - self.smooth_avg) / self.smooth_std
-
-                success = np.any(np.greater(cur_test_func, self.h))
-                if not detect_start:
-                    success = not success
-
-                # Keeps track of number of successes and failures
-                if success:
-                    self.cur_count += 1
+                if (start_time - data_time > self.detect_window + 2 * COPY_THRESHOLD):
+                    first_start_idx = idx
                 else:
-                    self.err_count += 1
+                    idx -= 1
 
-                if self.err_count >= self.max_err:
-                    self.err_count = 0
-                    self.cur_count = 0
+            #self.very_first = first_start_idx
+            new_emg_count   = first_end_idx - first_start_idx + 1
 
-                if (self.cur_count + self.err_count) > max_count:
-                    max_count = (self.cur_count + self.err_count)
+        # Add new emg\imu samples:
+        for first_idx in range(first_start_idx, first_end_idx + 1):
+            sec_idx = data_mapping[first_idx]
 
-                if max_count >= min_samples:
-                    emg_start_idx = cur_idx - min_samples + 1
-                else:
-                    cur_idx += 1
+            if (sec_idx != self.myo_data.invalid_map) and (sec_idx < len(second_myo_data.timestamps)):
+                # EMG
+                first_emg   = [x[first_idx] for x in first_myo_data.emg]
+                second_emg  = [x[sec_idx] for x in second_myo_data.emg]
+                self.emg_list.append(first_emg + second_emg)
 
-            #print((self.cur_count, new_emg_count))
-            self.last_end_idx = first_end_idx
+                if self.use_imu:
+                    # ACC
+                    first_acc   = [x[first_idx] for x in first_myo_data.accel]
+                    second_acc  = [x[sec_idx] for x in second_myo_data.accel]
+                    self.acc_list.append(first_acc + second_acc)
 
-            if emg_start_idx is not None:
-                self.cur_count = 0
+                    # GYRO
+                    first_gyro   = [x[first_idx] for x in first_myo_data.gyro]
+                    second_gyro  = [x[sec_idx] for x in second_myo_data.gyro]
+                    self.gyro_list.append(first_gyro + second_gyro)
+
+                    # MAG
+                    # first_mag   = [x[first_idx] for x in first_myo_data.orient]
+                    # second_mag  = [x[sec_idx] for x in second_myo_data.orient]
+                    # self.mag_list.append(first_mag + second_mag)
+
+        emg_samples = np.array(self.emg_list)
+
+        #
+        # Apply sixth-order digital butterworth lowpass filter with 50 Hz cutoff frequency to rectified signal
+        #
+        fs          = 200
+        nyquist     = 0.5 * fs
+        cutoff      = 50
+        order       = 6
+        b, a        = butter(order, cutoff / nyquist, btype='lowpass')
+        emg_samples = np.abs(emg_samples)
+        filt_data   = lfilter(b, a, emg_samples, axis=0)
+
+        #
+        # Use test function to determine onset/end of signal
+        #
+        max_idx         = emg_samples.shape[0] - 1
+        emg_start_idx   = None
+        max_count       = 0
+
+        if self.last_end_idx is None:
+            cur_idx = self.window_size
+        else:
+            cur_idx = max_idx - new_emg_count + 1
+
+        if detect_start:
+            min_samples = self.min_sig_samples
+        else:
+            min_samples = self.min_rest_samples
+
+        while (emg_start_idx is None) and (cur_idx <= max_idx):
+
+            # Test for non-noise data
+            cur_test_func = (np.mean(filt_data[cur_idx - self.window_size: cur_idx],
+                                     axis=0) - self.smooth_avg) / self.smooth_std
+
+            success = np.any(np.greater(cur_test_func, self.h))
+            if not detect_start:
+                success = not success
+
+            # Keeps track of number of successes and failures
+            if success:
+                self.cur_count += 1
+            else:
+                self.err_count += 1
+
+            if self.err_count >= self.max_err:
                 self.err_count = 0
-                return emg_start_idx
+                self.cur_count = 0
 
-            return None
+            if (self.cur_count + self.err_count) > max_count:
+                max_count = (self.cur_count + self.err_count)
 
-        def run(self):
+            if max_count >= min_samples:
+                emg_start_idx = cur_idx - min_samples + 1
+            else:
+                cur_idx += 1
 
-            #
-            # Check if all videos exist
-            #
-            exercises_found = self.check_video_paths()
+        self.last_end_idx = first_end_idx
 
-            def missing_exer(self, ex_found, ex_label):
-                if not ex_found:
-                    # Re-enable video buttons
-                    self.enable_control_buttons(True, False, True)
+        if emg_start_idx is not None:
+            self.cur_count = 0
+            self.err_count = 0
+            return emg_start_idx
 
-                    # Display warning
-                    self.warning = QErrorMessage()
-                    self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
-                    self.warning.show()
-                return ex_found
+        return None
 
-            if ((not missing_exer(self, exercises_found[0], "A")) or (not missing_exer(self, exercises_found[1], "B"))
-                    or (not missing_exer(self, exercises_found[2], "C"))):
-                return
+    def run(self):
 
-            self.running = True
-            time.sleep(self.setup_time)
-            self.enable_control_buttons(False, False, False)
+        #
+        # Check if all videos exist
+        #
+        exercises_found = self.check_video_paths()
 
-            while self.running:
+        def missing_exer(self, ex_found, ex_label):
+            if not ex_found:
+                # Re-enable video buttons
+                self.enable_control_buttons(True, False, True)
 
-                start_idx = self.detect_movement(True)
-                if start_idx is None:
+                # Display warning
+                self.warning = QErrorMessage()
+                self.warning.showMessage("Unable to find videos for Exercise {}.".format(ex_label))
+                self.warning.show()
+            return ex_found
+
+        if ((not missing_exer(self, exercises_found[0], "A")) or (not missing_exer(self, exercises_found[1], "B"))
+                or (not missing_exer(self, exercises_found[2], "C"))):
+            return
+
+        self.running = True
+        time.sleep(self.setup_time)
+        self.enable_control_buttons(False, False, False)
+
+        #
+        # Until user initiates a "stop", indefinitely make predictions
+        #
+        while self.running:
+
+            start_idx = self.detect_movement(True)
+            if start_idx is None:
+                #
+                # Trim EMG data
+                #
+                if len(self.emg_list) > self.max_samples:
+                   self.emg_list = self.emg_list[self.trim_samples:]
+                time.sleep(self.check_period)
+
+            else:
+                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                         Q_ARG(str, "Collecting Movement Data..."))
+                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                         Q_ARG(str, "font-weight: bold; font-size: 16pt; color: gold;"))
+
+                end_idx = None
+                while (end_idx is None) and (self.running):
+                    end_idx = self.detect_movement(False)
+                    if end_idx is None:
+                        time.sleep(self.check_period)
+
+                if not self.running:
+                    break
+
+                #
+                # Refine signal onset (using likelihood test)
+                #
+
+                # For debugging:
+                # emg_samples = np.array(self.emg_list)
+                # with open("temparray2", "wb") as f:
+                #     np.save(f, emg_samples)
+
+                #
+                # Trim excess data on the end
+                #
+                num_samples = end_idx - start_idx
+
+                if ((num_samples > self.min_duration * self.emg_rate) and
+                        (num_samples < self.max_duration * self.emg_rate)):
+
                     #
-                    # Trim EMG data
+                    # Refine start/end
                     #
-                    # if len(self.emg_list) > self.max_samples:
-                    #    self.emg_list = self.emg_list[self.trim_samples:]
+                    best_start, best_end = optimize_start_end(self.emg_list, start_idx, end_idx)
 
-                    time.sleep(self.check_period)
-                else:
-                    #print("START")
-                    #time.sleep(self.wait_period)
+                    if ( ((best_start is not None) and (best_end is not None)) and
+                            (best_end - best_start > self.min_duration * self.emg_rate)
+                        ):
 
-                    QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                             Q_ARG(str, "Collecting Movement Data..."))
-                    QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                             Q_ARG(str, "font-weight: bold; font-size: 16pt; color: gold;"))
+                        # For debugging:
+                        # with open("temparray", "wb") as f:
+                        #     np.save(f, np.array(self.emg_list[best_start: best_end]))
 
-                    end_idx = None
-                    while (end_idx is None) and (self.running):
+                        if (best_start is not None) and (best_end is not None):
+                            emg_samp   = np.array(self.emg_list[best_start: best_end])
 
-                        end_idx = self.detect_movement(False)
-                        if end_idx is None:
-                            time.sleep(self.check_period)
-                        else:
-                            pass
-                            #print("END")
+                            if self.use_imu:
+                                acc_samp   = np.array(self.acc_list[best_start: best_end])
+                                gyro_samp  = np.array(self.gyro_list[best_start: best_end])
 
-                    if not self.running:
-                        break
+                                # Avoid using magnetometer
+                                # mag_samp   = np.array(self.mag_list[best_start: best_end])
+                                # combined_samples = [emg_samp, acc_samp, gyro_samp, mag_samp]
+                                combined_samples = [emg_samp, acc_samp, gyro_samp]
 
-                    #
-                    # Refine signal onset (using likelihood test)
-                    #
-                    emg_samples = np.array(self.emg_list)
-                    with open("temparray2", "wb") as f:
-                        np.save(f, emg_samples)
+                            if not self.running:
+                                break
 
-                    #
-                    # Trim excess data on the end
-                    #
-                    num_samples = end_idx - start_idx
+                            #
+                            # Make a prediction
+                            #
+                            if self.use_imu:
+                                test_feat   = self.pred_model.feat_extractor.extract_feature_point(combined_samples).reshape(1, -1)
+                            else:
+                                test_feat   = self.pred_model.feat_extractor.extract_feature_point(emg_samp).reshape(1, -1)
+                            pred = self.pred_model.perform_inference(test_feat, None)[0]
 
-                    if ((num_samples > self.min_duration * self.emg_rate) and
-                            (num_samples < self.max_duration * self.emg_rate)):
-                        #print("Num samples:")
-                        #print((num_samples, len(self.emg_list)))
 
-                        #
-                        # Refine start/end
-                        #
-                        best_start, best_end = optimize_start_end(self.emg_list, start_idx, end_idx)
-
-                        if ( ((best_start is not None) and (best_end is not None)) and
-                                (best_end - best_start > self.min_duration * self.emg_rate)
-                            ):
-                            with open("temparray", "wb") as f:
-                                np.save(f, np.array(self.emg_list[best_start: best_end]))
-
-                            #print("BEST")
-                            #print(best_start, best_end)
-
-                            if (best_start is not None) and (best_end is not None):
-                                emg_samp   = np.array(self.emg_list[best_start: best_end])
-
-                                if self.use_imu:
-                                    acc_samp   = np.array(self.acc_list[best_start: best_end])
-                                    gyro_samp  = np.array(self.gyro_list[best_start: best_end])
-                                    #mag_samp   = np.array(self.mag_list[best_start: best_end])
-                                    #combined_samples = [emg_samp, acc_samp, gyro_samp, mag_samp]
-                                    combined_samples = [emg_samp, acc_samp, gyro_samp]
+                            if pred != self.rest_label:
+                                prob                        = self.pred_model.get_class_probabilities(test_feat)
+                                self.class_probabilities    = prob[0]
+                                self.num_samples_used       = num_samples
+                                self.worker_event.onPrediction.emit()
 
                                 if not self.running:
                                     break
 
                                 #
-                                # Make a prediction
+                                # Start playing videos, and updating text fields, via background thread
                                 #
-                                if self.use_imu:
-                                    test_feat   = self.pred_model.feat_extractor.extract_feature_point(combined_samples).reshape(1, -1)
-                                else:
-                                    test_feat   = self.pred_model.feat_extractor.extract_feature_point(emg_samp).reshape(1, -1)
-                                pred        = self.pred_model.perform_inference(test_feat, None)[0]
+                                self.set_label(pred)
+                                self.display_prediction()
+                                time.sleep(self.post_display_exit)
 
-
-                                if pred != self.rest_label:
-
-                                    # print("The pred:")
-                                    # print(pred)
-                                    prob = self.pred_model.get_class_probabilities(test_feat)
-                                    # print(prob[0][np.argmax(prob)])
-                                    # print(np.sort(prob[0])[48:])
-
-                                    self.class_probabilities = prob[0]
-                                    self.num_samples_used    = num_samples
-                                    self.worker_event.onPrediction.emit()
-
-                                    if not self.running:
-                                        break
-
-                                    #
-                                    # Start playing videos, and updating text fields, via background thread
-                                    #
-                                    self.set_label(pred)
-                                    self.display_prediction()
-                                    time.sleep(self.post_display_exit)
-                                    #print("Done")
-                                #with open("temparray", "wb") as f:
-                                #    np.save(f, emg_samples)
-                                #return
-                                else:
-                                    QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                                             Q_ARG(str, "Predicted rest..."))
-                                    QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                                             Q_ARG(str,
-                                                                   "font-weight: bold; font-size: 16pt; color: red;"))
-
-                        else:
-                            QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                                     Q_ARG(str, "Unable to refine gesture detection..."))
-                            QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                                     Q_ARG(str, "font-weight: bold; font-size: 16pt; color: red;"))
+                            else:
+                                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                                         Q_ARG(str, "Predicted rest..."))
+                                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                                         Q_ARG(str,
+                                                               "font-weight: bold; font-size: 16pt; color: red;"))
 
                     else:
                         QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                                 Q_ARG(str, "Invalid waveform length..."))
+                                                 Q_ARG(str, "Unable to refine gesture detection..."))
                         QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
                                                  Q_ARG(str, "font-weight: bold; font-size: 16pt; color: red;"))
 
-                    #
-                    #
-                    # #
-                    # # Clear states
-                    # #
-                    self.emg_list.clear()
-                    self.acc_list.clear()
-                    self.gyro_list.clear()
-                    self.mag_list.clear()
-                    self.last_end_idx = None
-
-
-
-        ################################################################################################################
-        ################################################################################################################
-        ################################################################################################################
-        #
-        # Video playing functions
-        #
-        ################################################################################################################
-        ################################################################################################################
-        ################################################################################################################
-
-
-        def start_online_pred(self):
-            # Disable play/pause/stop buttons until it is safe
-            self.enable_control_buttons(False, False, False)
-
-            # If any button click is still being processed
-            if (self.unpausing) or (self.pausing) or (self.shutdown):
-                return
-
-            if self.playing:
-                self.enable_control_buttons(False, True, True)
-                return
-
-            if self.paused:
-                self.force_unpause()
-                return
-
-            self.run()
-
-        def pause_online_pred(self):
-            """
-                This function is called when the user presses "Pause".
-                    > The background worker pauses the playback of video, and updating of text fields.
-                    > The ground truth labels also become invalid.
-            """
-            if (not self.playing) or (self.pausing) or (self.shutdown):
-                return
-            self.enable_control_buttons(False, False, False)
-            self.pausing = True
-
-            # Pause the background worker
-            self.force_pause()
-
-        def stop_online_pred(self):
-            """
-                This function is called when the user presses "Stop".
-                    > The background worker finishes executing the run() function as a result of being "stopped".
-            """
-            if (not self.playing) or (self.shutdown):
-                return
-            self.enable_control_buttons(False, False, False)
-            self.shutdown = True
-
-            # Force the background worker to leave run()
-            self.force_stop()
-
-        def on_worker_started(self):
-            """
-                This function is called when the background worker has started.
-            """
-            self.started = True
-            self.playing = True
-            self.enable_control_buttons(False, True, True)
-
-        def on_worker_unpaused(self):
-            """
-                 This function is called when the background worker has unpaused.
-             """
-            self.playing = True
-            self.enable_control_buttons(False, True, True)
-            self.unpausing = False
-
-        def on_worker_paused(self):
-            """
-                This function is called when the background worker has paused.
-            """
-            self.playing = False
-            self.pausing = False
-            self.enable_control_buttons(True, False, True)
-
-        def on_worker_stopped(self):
-            """
-                This function is called when the background worker has finished execution of run().
-            """
-            self.playing    = False
-
-            # Stop video player
-            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
-
-            # Update GUI appearance
-            QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, "0.0s"))
-            QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, "No Movement"))
-            QMetaObject.invokeMethod(self.desc_explain, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, "No description available."))
-
-
-            if not self.shutdown:
-                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "Waiting for Movement..."))
-                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                         Q_ARG(str, "font-weight: bold; font-size: 16pt; color: orange;"))
-
-                self.enable_control_buttons(False, True, True)
-            else:
-                self.running = False
-                self.enable_control_buttons(False, False, False)
-
-                QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                         Q_ARG(str, "Waiting to Start..."))
-                QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                         Q_ARG(str, " font-weight: bold; font-size: 18pt; "
-                                                    "   color: green;"))
-
-                self.worker_event.onShutdown.emit()
-
-        def play_video(self, video_path, period):
-            """
-                Prepare video for playback, media_status_changed is called when loading finishes.
-
-            :param video_path: Path to video
-            :param period: Time to play video
-            """
-            self.video_playing = True
-            self.state_time_remain = period
-            abs_path = QFileInfo(video_path).absoluteFilePath()
-            QMetaObject.invokeMethod(self.video_player, "setMedia", Qt.QueuedConnection,
-                                     Q_ARG(QMediaContent, QMediaContent(QUrl.fromLocalFile(abs_path))))
-
-
-        def media_status_changed(self, state):
-            """
-                This function is called when the media player's media finishes loading/playing/etc.
-            :param state: State corresponding to media player update
-            """
-            if self.video_playing:
-                if state == self.MediaStatus.LoadedMedia.value:
-                    QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
-                    QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
-                elif state == self.MediaStatus.EndOfMedia.value:
-                    if self.state_time_remain > self.timer_interval / 1000:
-                        QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
-
-        def stop_state(self):
-            """
-                Upon completion of a repetition/rest/prepation state, this function is called.
-            """
-            self.video_playing = False
-            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
-
-
-        def force_stop(self):
-            """
-                GroundTruthHelper calls this function to stop this background worker thread.
-            """
-            QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
-            self.video_playing  = False
-            self.stopped        = True
-
-
-        def force_pause(self):
-            """
-                GroundTruthHelper calls this function to pause this background worker thread.
-            """
-            QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
-            QMetaObject.invokeMethod(self.video_player, "pause", Qt.QueuedConnection)
-            self.paused = True
-
-            # Re-enable video buttons
-            self.on_worker_paused()
-
-
-        def force_unpause(self):
-            """
-                GroundTruthHelper calls this function to unpause this background worker thread.
-            """
-            QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
-            QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
-            self.paused = False
-
-            # Re-enable video buttons
-            self.on_worker_unpaused()
-
-        def set_label(self, cur_label):
-            #
-            # Obtain movement number & exercise
-            #
-            if cur_label > self.num_exercise_A:
-
-                if cur_label > self.num_exercise_A + self.num_exercise_B:
-                    self.cur_ex = "C"
-                    self.movement_num = cur_label - self.num_exercise_B - self.num_exercise_A
-
                 else:
-                    self.cur_ex = "B"
-                    self.movement_num = cur_label - self.num_exercise_A
-            else:
-                self.movement_num = cur_label
-                self.cur_ex = "A"
+                    QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                             Q_ARG(str, "Invalid waveform length..."))
+                    QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                             Q_ARG(str, "font-weight: bold; font-size: 16pt; color: red;"))
+
+                #
+                #
+                # #
+                # # Clear states
+                # #
+                self.emg_list.clear()
+                self.acc_list.clear()
+                self.gyro_list.clear()
+                self.mag_list.clear()
+                self.last_end_idx = None
 
 
-        def display_prediction(self):
-            # Re-enable video buttons
-            self.complete = False
-            self.on_worker_started()
 
-            #
-            # Setup for current movement
-            #
-            QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, "{} s".format(self.display_period)))
+    ################################################################################################################
+    ################################################################################################################
+    ################################################################################################################
+    #
+    # Video playing functions
+    #
+    ################################################################################################################
+    ################################################################################################################
+    ################################################################################################################
 
-            current_description = MOVEMENT_DESC[self.cur_ex][self.movement_num]
-            QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, current_description[0]))
-            QMetaObject.invokeMethod(self.desc_explain, "setText",
-                                     Qt.QueuedConnection, Q_ARG(str, current_description[1]))
 
-            #
-            # Preparation period
-            #
+    def start_online_pred(self):
+        # Disable play/pause/stop buttons until it is safe
+        self.enable_control_buttons(False, False, False)
+
+        # If any button click is still being processed
+        if (self.unpausing) or (self.pausing) or (self.shutdown):
+            return
+
+        if self.playing:
+            self.enable_control_buttons(False, True, True)
+            return
+
+        if self.paused:
+            self.force_unpause()
+            return
+
+        self.run()
+
+    def pause_online_pred(self):
+        """
+            This function is called when the user presses "Pause".
+                > The background worker pauses the playback of video, and updating of text fields.
+                > The ground truth labels also become invalid.
+        """
+        if (not self.playing) or (self.pausing) or (self.shutdown):
+            return
+        self.enable_control_buttons(False, False, False)
+        self.pausing = True
+
+        # Pause the background worker
+        self.force_pause()
+
+    def stop_online_pred(self):
+        """
+            This function is called when the user presses "Stop".
+                > The background worker finishes executing the run() function as a result of being "stopped".
+        """
+        if (not self.playing) or (self.shutdown):
+            return
+        self.enable_control_buttons(False, False, False)
+        self.shutdown = True
+
+        # Force the background worker to leave run()
+        self.force_stop()
+
+    def on_worker_started(self):
+        """
+            This function is called when the background worker has started.
+        """
+        self.started = True
+        self.playing = True
+        self.enable_control_buttons(False, True, True)
+
+    def on_worker_unpaused(self):
+        """
+             This function is called when the background worker has unpaused.
+         """
+        self.playing = True
+        self.enable_control_buttons(False, True, True)
+        self.unpausing = False
+
+    def on_worker_paused(self):
+        """
+            This function is called when the background worker has paused.
+        """
+        self.playing = False
+        self.pausing = False
+        self.enable_control_buttons(True, False, True)
+
+    def on_worker_stopped(self):
+        """
+            This function is called when the background worker has finished execution of run().
+        """
+        self.playing    = False
+
+        # Stop video player
+        QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+
+        # Update GUI appearance
+        QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, "0.0s"))
+        QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, "No Movement"))
+        QMetaObject.invokeMethod(self.desc_explain, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, "No description available."))
+
+
+        if not self.shutdown:
             QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, "Prediction made."))
+                                     Q_ARG(str, "Waiting for Movement..."))
             QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
-                                     Q_ARG(str, "font-weight: bold; font-size: 18pt; color: blue;"))
+                                     Q_ARG(str, "font-weight: bold; font-size: 16pt; color: orange;"))
 
-            for ex_vids in self.all_video_paths:
-                if ex_vids[0] == self.cur_ex:
-                    video_path = ex_vids[1][self.movement_num - 1]
-                    break
+            self.enable_control_buttons(False, True, True)
+        else:
+            self.running = False
+            self.enable_control_buttons(False, False, False)
 
-            self.play_video(video_path, self.display_period)
+            QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                     Q_ARG(str, "Waiting to Start..."))
+            QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                     Q_ARG(str, " font-weight: bold; font-size: 18pt; "
+                                                "   color: green;"))
 
-            while self.video_playing or (self.paused and not self.stopped):
-                time.sleep(self.timer_interval / 1000)
+            self.worker_event.onShutdown.emit()
 
-            #
-            # If user pressed stop
-            #
-            self.complete = True
-            self.on_worker_stopped()
+    def play_video(self, video_path, period):
+        """
+            Prepare video for playback, media_status_changed is called when loading finishes.
 
-        ################################################################################################################
-        ################################################################################################################
-        ################################################################################################################
+        :param video_path: Path to video
+        :param period: Time to play video
+        """
+        self.video_playing = True
+        self.state_time_remain = period
+        abs_path = QFileInfo(video_path).absoluteFilePath()
+        QMetaObject.invokeMethod(self.video_player, "setMedia", Qt.QueuedConnection,
+                                 Q_ARG(QMediaContent, QMediaContent(QUrl.fromLocalFile(abs_path))))
 
+
+    def media_status_changed(self, state):
+        """
+            This function is called when the media player's media finishes loading/playing/etc.
+        :param state: State corresponding to media player update
+        """
+        if self.video_playing:
+            if state == self.MediaStatus.LoadedMedia.value:
+                QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+                QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
+            elif state == self.MediaStatus.EndOfMedia.value:
+                if self.state_time_remain > self.timer_interval / 1000:
+                    QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+
+    def stop_state(self):
+        """
+            Upon completion of a repetition/rest/prepation state, this function is called.
+        """
+        self.video_playing = False
+        QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+
+
+    def force_stop(self):
+        """
+            GroundTruthHelper calls this function to stop this background worker thread.
+        """
+        QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
+        QMetaObject.invokeMethod(self.video_player, "stop", Qt.QueuedConnection)
+        self.video_playing  = False
+        self.stopped        = True
+
+
+    def force_pause(self):
+        """
+            GroundTruthHelper calls this function to pause this background worker thread.
+        """
+        QMetaObject.invokeMethod(self.timer, "stop", Qt.QueuedConnection)
+        QMetaObject.invokeMethod(self.video_player, "pause", Qt.QueuedConnection)
+        self.paused = True
+
+        # Re-enable video buttons
+        self.on_worker_paused()
+
+
+    def force_unpause(self):
+        """
+            GroundTruthHelper calls this function to unpause this background worker thread.
+        """
+        QMetaObject.invokeMethod(self.timer, "start", Qt.QueuedConnection, Q_ARG(int, self.timer_interval))
+        QMetaObject.invokeMethod(self.video_player, "play", Qt.QueuedConnection)
+        self.paused = False
+
+        # Re-enable video buttons
+        self.on_worker_unpaused()
+
+    def set_label(self, cur_label):
+        #
+        # Obtain movement number & exercise
+        #
+        if cur_label > self.num_exercise_A:
+
+            if cur_label > self.num_exercise_A + self.num_exercise_B:
+                self.cur_ex = "C"
+                self.movement_num = cur_label - self.num_exercise_B - self.num_exercise_A
+
+            else:
+                self.cur_ex = "B"
+                self.movement_num = cur_label - self.num_exercise_A
+        else:
+            self.movement_num = cur_label
+            self.cur_ex = "A"
+
+
+    def display_prediction(self):
+        # Re-enable video buttons
+        self.complete = False
+        self.on_worker_started()
+
+        #
+        # Setup for current movement
+        #
+        QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, "{} s".format(self.display_period)))
+
+        current_description = MOVEMENT_DESC[self.cur_ex][self.movement_num]
+        QMetaObject.invokeMethod(self.desc_title, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, current_description[0]))
+        QMetaObject.invokeMethod(self.desc_explain, "setText",
+                                 Qt.QueuedConnection, Q_ARG(str, current_description[1]))
+
+        #
+        # Preparation period
+        #
+        QMetaObject.invokeMethod(self.status_label, "setText", Qt.QueuedConnection,
+                                 Q_ARG(str, "Prediction made."))
+        QMetaObject.invokeMethod(self.status_label, "setStyleSheet", Qt.QueuedConnection,
+                                 Q_ARG(str, "font-weight: bold; font-size: 18pt; color: blue;"))
+
+        for ex_vids in self.all_video_paths:
+            if ex_vids[0] == self.cur_ex:
+                video_path = ex_vids[1][self.movement_num - 1]
+                break
+
+        self.play_video(video_path, self.display_period)
+
+        while self.video_playing or (self.paused and not self.stopped):
+            time.sleep(self.timer_interval / 1000)
+
+        #
+        # If user pressed stop
+        #
+        self.complete = True
+        self.on_worker_stopped()
+
+    ################################################################################################################
+    ################################################################################################################
+    ################################################################################################################

@@ -1,13 +1,13 @@
 #
 # PyQt5 imports
 #
-from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QProgressDialog, QTabWidget, QFileDialog, QMessageBox,
-                             QWidget, QLabel, QHBoxLayout, QVBoxLayout, QCheckBox, QFrame, QMainWindow, QPushButton,
-                             QGridLayout, QSizePolicy, QGroupBox, QTextEdit, QLineEdit, QErrorMessage, QProgressBar,
-                             QSpacerItem, QStackedWidget)
+from PyQt5.QtWidgets import (QListWidget, QListWidgetItem, QFileDialog, QWidget, QLabel, QHBoxLayout, QVBoxLayout,
+                                QFrame, QMainWindow, QPushButton, QGridLayout, QSizePolicy, QGroupBox, QTextEdit,
+                                QLineEdit, QErrorMessage, QProgressBar, QStackedWidget, QTableWidget, QHeaderView,
+                                QTableWidgetItem, QCheckBox)
 
-from PyQt5.QtGui import QPixmap, QIcon
-from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl,\
+from PyQt5.QtGui import QPixmap, QFont, QIcon
+from PyQt5.QtCore import (QSize, QThreadPool, Qt, QRunnable, QMetaObject, Q_ARG, QObject, pyqtSignal, QTimer, QUrl,
                             QFileInfo)
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 import pyqtgraph as pg
@@ -31,61 +31,223 @@ except:
 #
 # Miscellaneous imports
 #
-import threading
 from enum import Enum
 import time
-from functools import partial
-from os.path import curdir, exists, join, abspath
-import copy
-from serial.tools.list_ports import comports
-import copy
+from os.path import exists, join, abspath
 
 #
 # Submodules in this repository
 #
-from pymyolinux import MyoDongle
 from movements import *
 from param import *
 
 class OnlineTraining(QWidget):
+    """
+        A GUI tab that allows for online training (update a model based on incoming data)
+    """
 
     class MovementsSelection(QMainWindow):
+        """
+            A window that allows a user to select movements desired for online training
+        """
 
         def __init__(self):
             super().__init__()
+
+            #
+            # Find paths to all screenshots
+            #
+            self.all_screenshot_paths       = [("A", []), ("B", []), ("C", [])]
+            self.screenshots_dir            = "gesture_screenshots"
+            self.screenshot_path_template   = [
+                                                ("exercise_a/a{}.jpg", 12),
+                                                ("exercise_b/b{}.jpg", 17),
+                                                ("exercise_c/c{}.jpg", 23)
+                                            ]
+
+            self.is_ready       = self.generate_screenshot_paths()
+            self.num_exercise_A = 12
+            self.num_exercise_B = 17
+            self.num_classes    = 53 # 52 + rest
+            self.default_reps   = 6
+
             self.init_ui()
 
         def init_ui(self):
-            self.setGeometry(0, 0, 1024/2, 768/2)
+            self.setGeometry(0, 0, 1024, 768)
             top_level_widget = QWidget(self)
             self.setCentralWidget(top_level_widget)
-
             self.setWindowTitle("Select Desired Movements")
+            top_layout = QGridLayout()
+
+            #
+            # Prediction visualization (list)
+            #
+            self.predictions_list = QTableWidget(0, 4)
+            self.predictions_list.horizontalHeader().setStretchLastSection(True)
+            self.predictions_list.horizontalHeader().setFont(QFont("Arial", 16, QFont.Bold))
+            self.predictions_list.verticalHeader().setFont(QFont("Arial", 16, QFont.Bold))
+            self.predictions_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            self.predictions_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+            self.predictions_list.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+            self.predictions_list.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+            self.predictions_list.setHorizontalHeaderLabels(["Screenshot", "Title", "# Reps", "Selected"])
+            self.predictions_list.setIconSize(QSize(200, 150))
+
+            top_layout.addWidget(self.predictions_list, 0, 0)
+
+            self.predictions_list.clearContents()
+            self.predictions_list.setRowCount(self.num_classes)
+            list_idx = 0
+
+            for idx in range(self.num_classes):
+
+                temp_widget = QListWidgetItem()
+                temp_widget.setBackground(Qt.gray)
+
+                #
+                # Create widget containing relevant prediction information
+                #
+                if idx == 0:
+                    cur_title           = "Rest"
+                    cur_screenshot_path = None
+                else:
+                    ex, movement_num    = self.get_ex_movement(idx)
+                    cur_screenshot_path = self.all_screenshot_paths[ord(ex) - ord("A")][1][movement_num - 1]
+                    cur_title           = MOVEMENT_DESC[ex][movement_num][0]
+
+                # Create new table entry
+                screenshot_widget = QTableWidgetItem()
+                screenshot_widget.setTextAlignment(Qt.AlignCenter)
+                if cur_screenshot_path is not None:
+                    screenshot = QIcon(QPixmap(cur_screenshot_path))
+                    screenshot_widget.setIcon(screenshot)
+                else:
+                    screenshot_widget.setText("N / A")
+
+                # Set table entry parameters
+                title_widget = QTableWidgetItem(cur_title)
+                title_widget.setTextAlignment(Qt.AlignCenter)
+                title_widget.setFont(QFont("Helvetica", 14, QFont.Bold))
+
+                num_reps = QTableWidgetItem(str(self.default_reps))
+                num_reps.setFont(QFont("Helvetica", 14))
+                num_reps.setTextAlignment(Qt.AlignCenter)
+                num_reps.setFlags(num_reps.flags() | Qt.ItemIsEditable)
+
+                selected        = QCheckBox()
+                selec_layout    = QHBoxLayout()
+                selec_layout.addWidget(selected)
+                selec_layout.setAlignment(Qt.AlignCenter)
+
+                self.predictions_list.setItem(list_idx, 0, screenshot_widget)
+                self.predictions_list.setItem(list_idx, 1, title_widget)
+                self.predictions_list.setItem(list_idx, 2, num_reps)
+                self.predictions_list.setCellWidget(list_idx, 3, QWidget())
+                self.predictions_list.cellWidget(list_idx, 3).setLayout(selec_layout)
+                self.predictions_list.verticalHeader().setSectionResizeMode(list_idx, QHeaderView.Stretch)
+                list_idx += 1
+
+            top_level_widget.setLayout(top_layout)
+
+        def generate_screenshot_paths(self):
+            """
+                Generates all screenshot paths from a template
+
+            :return: [bool, bool, bool] : Do all screenshots exist for the ith exercise?
+            """
+
+            def create_exercise_paths(self, ex_label):
+                ex_index            = ord(ex_label) - ord('A')
+                found_screenshots   = True
+                path_template       = join(self.screenshots_dir, self.screenshot_path_template[ex_index][0])
+                max_idx             = self.screenshot_path_template[ex_index][1]
+                ex_path_created     = []
+
+                for i in range(1, max_idx + 1):
+                    full_path = path_template.format(i)
+                    ex_path_created.append(full_path)
+
+                    if not exists(full_path):
+                        found_screenshots = False
+                        break
+
+                self.all_screenshot_paths[ex_index][1].extend(ex_path_created)
+                return found_screenshots
+
+            exercises_found     = [True, True, True]
+            exercises_found[0]  = create_exercise_paths(self, "A")
+            exercises_found[1]  = create_exercise_paths(self, "B")
+            exercises_found[2]  = create_exercise_paths(self, "C")
+
+            return exercises_found
+
+        def get_ex_movement(self, current_pred):
+            """
+            :param current_pred: A prediction label (0-52)
+            :return: The exercise label, and movement number
+            """
+
+            #
+            # Obtain movement number & exercise
+            #
+            if current_pred > self.num_exercise_A:
+
+                if current_pred > self.num_exercise_A + self.num_exercise_B:
+                    cur_ex          = "C"
+                    movement_num    = current_pred - self.num_exercise_B - self.num_exercise_A
+
+                else:
+                    cur_ex          = "B"
+                    movement_num    = current_pred - self.num_exercise_A
+            else:
+                movement_num   = current_pred
+                cur_ex         = "A"
+
+            return cur_ex, movement_num
+
+        def throw_error_message(self, message):
+            # Re-enable video buttons
+            self.enable_video_buttons(True, False, False)
+
+            # Display warning
+            self.warning = QErrorMessage()
+            self.warning.showMessage(message)
+            self.warning.show()
+            return None
+
 
     class MyoConnectedWidget(QWidget):
+        """
+            A widget representing a connected Myo armband device.
+        """
 
         def __init__(self, address, rssi, battery):
+            """
+            :param address: MAC address of Myo armband device
+            :param rssi: Signal strength of connected armband
+            :param battery: Battery level (1-100) of connected armband
+            """
             super().__init__()
             self.address = address
             self.init_ui(address, rssi, battery)
 
         def init_ui(self, address, rssi, battery):
-
             infoLayout = QHBoxLayout()
             infoLayout.setSpacing(5)
 
             # Myo armband icon
-            lbl = QLabel(self)
+            lbl  = QLabel(self)
             orig = QPixmap(join(abspath(__file__).replace("online_test.py", ""), "icons/myo.png"))
-            new = orig.scaled(QSize(30, 30), Qt.KeepAspectRatio)
+            new  = orig.scaled(QSize(30, 30), Qt.KeepAspectRatio)
             lbl.setPixmap(new)
 
             #
             # Format the Myo hardware (MAC) into a readable form
             #
             infoLayout.addWidget(lbl)
-            formatted_address = ""
-            length = len(address.hex())
+            formatted_address   = ""
+            length              = len(address.hex())
 
             for i, ch in enumerate(address.hex()):
                 formatted_address += ch
@@ -95,24 +257,17 @@ class OnlineTraining(QWidget):
             vline = QFrame()
             vline.setFrameShape(QFrame.VLine)
             vline.setFrameShadow(QFrame.Sunken)
-            # vline2 = QFrame()
-            # vline2.setFrameShape(QFrame.VLine)
-            # vline2.setFrameShadow(QFrame.Sunken)
 
             #
             # Myo armband address, signal strength
             #
-            addr_label = QLabel(formatted_address)
+            addr_label  = QLabel(formatted_address)
             addr_label.setContentsMargins(5, 0, 0, 0)
-            cur_font = addr_label.font()
+            cur_font    = addr_label.font()
             cur_font.setPointSize(10)
             addr_label.setFont(cur_font)
             infoLayout.addWidget(addr_label)
             infoLayout.addWidget(vline)
-            # rssi_label = QLabel(str(rssi) + " dBm")
-            # infoLayout.addWidget(rssi_label)
-            # infoLayout.addWidget(vline2)
-            # infoLayout.setStretchFactor(rssi_label, 3)
             infoLayout.setStretchFactor(addr_label, 4)
 
             #
@@ -124,10 +279,8 @@ class OnlineTraining(QWidget):
             self.battery_level.setValue(battery)
             infoLayout.addWidget(self.battery_level)
             infoLayout.setStretchFactor(self.battery_level, 2)
-
-
-
             self.setLayout(infoLayout)
+
 
     def __init__(self, myo_data):
         super().__init__()
