@@ -320,11 +320,11 @@ class DataTools(QWidget):
         # EMG Data Visualization
         #
         # EMG data plots
-        self.myo_1_layouts = [pg.GraphicsLayoutWidget() for x in range(8)]
-        self.myo_2_layouts = [pg.GraphicsLayoutWidget() for x in range(8)]
-        self.myo_1_charts = [None for x in range(8)]
-        self.myo_2_charts = [None for x in range(8)]
-        self.top_tab = QTabWidget()  # Top-level tab container
+        self.myo_1_layouts  = [pg.GraphicsLayoutWidget() for x in range(8)]
+        self.myo_2_layouts  = [pg.GraphicsLayoutWidget() for x in range(8)]
+        self.myo_1_charts   = [None for x in range(8)]
+        self.myo_2_charts   = [None for x in range(8)]
+        self.top_tab        = QTabWidget()  # Top-level tab container
 
         # Old backend
         # self.myo_1_charts = [QChartView() for x in range(8)]               # EMG data plots
@@ -547,7 +547,7 @@ class DataTools(QWidget):
         dialog.setOption(QFileDialog.ShowDirsOnly)
         self.data_directory = dialog.getExistingDirectory(self, 'Choose Directory', curdir)
 
-        if exists(curdir):
+        if exists(self.data_directory):
             self.save_path.setText(self.data_directory)
 
     def save_clicked(self):
@@ -805,7 +805,7 @@ class DataTools(QWidget):
             port_list_entry = QListWidgetItem(port_attr["device"])
             port_list_entry.setIcon(QIcon(join(abspath(__file__).replace("data_tools.py", ""), "icons/sp.png")))
             port_list_entry.port_idx = ports_found
-            port_list_entry.port = port_attr["device"]
+            port_list_entry.port     = port_attr["device"]
             self.ports_found.insertItem(ports_found, port_list_entry);
             ports_found += 1
             self.myo_counts.append(0)  # No Myo devices found for this newly found port yet

@@ -20,7 +20,7 @@ from scipy.signal import butter, lfilter
 from scipy.stats import multivariate_normal
 import numpy as np
 import ninaeval
-from ninaeval.utils.gt_tools_v3 import optimize_start_end
+from ninaeval.utils.gt_tools import optimize_start_end
 
 try:
     import cPickle as pickle
@@ -39,6 +39,8 @@ from os.path import curdir, exists, join, abspath
 #
 from movements import *
 from param import *
+from shared_workers import *
+
 
 class OnlineTesting(QWidget):
     """
@@ -165,9 +167,6 @@ class OnlineTesting(QWidget):
                 list_idx = 0
 
                 for idx in indices:
-
-                    temp_widget = QListWidgetItem()
-                    temp_widget.setBackground(Qt.gray)
 
                     #
                     # Create widget containing relevant prediction information
@@ -667,7 +666,6 @@ class OnlineTesting(QWidget):
 
             :param address: MAC address of Myo armband device
         """
-
         num_widgets = self.devices_connected.count()
 
         for idx in range(num_widgets):
@@ -852,7 +850,6 @@ class OnlineTesting(QWidget):
         :param enable_start: Enable online testing start button
         :param enable_pause: Enable online testing pause button
         :param enable_stop: Enable online testing stop button
-        :return:
         """
         self.controls_start.setEnabled(enable_start)
         self.controls_pause.setEnabled(enable_pause)
@@ -978,138 +975,7 @@ class OnlineTesting(QWidget):
 ########################################################################################################################
 ########################################################################################################################
 ########################################################################################################################
-#
-# Custom PyQt5 events (used by QRunnables)
-#
-########################################################################################################################
-########################################################################################################################
-########################################################################################################################
 
-# Used by NoiseCollectionWorker
-class NoiseUpdates(QObject):
-    workerStarted   = pyqtSignal()
-    collectComplete = pyqtSignal()
-    modelReady      = pyqtSignal()
-
-########################################################################################################################
-########################################################################################################################
-########################################################################################################################
-
-class NoiseCollectionWorker(QRunnable):
-    """
-        Collects noise data, processes it, and creates a noise model, used by signal detection.
-    """
-
-    def __init__(self, myo_data, noise_duration, noise_increments, progress_bar, progress_label, on_worker_started,
-                        on_collect_complete, on_model_ready):
-        """
-        :param myo_data: A MyoData object, holding all data collected from both Myo armbands
-        :param noise_duration: The duration to collect noise data for
-        :param noise_increments: How many increments for the noise collection progress bar
-        :param progress_bar: The noise collection progress bar
-        :param progress_label: A QLineEdit text field, containing the remaining amount of time
-        :param on_worker_started: A function called on the start of noise data collection
-        :param on_collect_complete: A function called on completion of noise data collection
-        :param on_model_ready: A function called on completion of noise model creation
-        """
-        super().__init__()
-
-        self.myo_data           = myo_data
-        self.noise_duration     = noise_duration
-        self.noise_increments   = noise_increments
-        self.progress_bar       = progress_bar
-        self.progress_label     = progress_label
-
-        # Configurable
-        self.buffer_time    = 1     # Add a buffer to account for startup of this background thread
-
-        # States
-        self.start_time         = time.time() + self.buffer_time
-        self.currrent_increment = 0
-
-        self.worker_updates = NoiseUpdates()
-        self.worker_updates.workerStarted.connect(on_worker_started)
-        self.worker_updates.collectComplete.connect(on_collect_complete)
-        self.worker_updates.modelReady.connect(on_model_ready)
-
-        # To be filled via run()
-        self.smooth_avg = None
-        self.smooth_std = None
-        self.noise_mean = None
-        self.noise_cov  = None
-
-    def run(self):
-        #
-        # Wait for data collection to finish
-        #
-        time.sleep(self.buffer_time)
-        while (time.time() - self.start_time) < self.noise_duration:
-            QMetaObject.invokeMethod(self.progress_bar, "setValue", Qt.QueuedConnection,
-                                     Q_ARG(int, self.currrent_increment))
-
-
-            time_remaining = "{0:.1f}".format(self.noise_duration - (time.time() - self.start_time)) + " s"
-            QMetaObject.invokeMethod(self.progress_label, "setText", Qt.QueuedConnection,
-                                     Q_ARG(str, time_remaining))
-
-            time.sleep(self.noise_duration / self.noise_increments)
-            self.currrent_increment += 1
-
-        end_time = time.time()
-        self.worker_updates.collectComplete.emit()
-
-        #
-        # Extract data in time window
-        #
-        first_myo_data  = self.myo_data.band_1
-        second_myo_data = self.myo_data.band_2
-        data_mapping    = self.myo_data.data_mapping
-
-        # Find start/end indices of first dataset
-        first_data_indices  = [None, None]
-        default_final       = len(first_myo_data.timestamps)
-
-        for i, data_time in enumerate(first_myo_data.timestamps):
-            if first_data_indices[0] is None:
-                if data_time > self.start_time:
-                    first_data_indices[0] = i
-            if first_data_indices[1] is None:
-                if data_time > end_time:
-                    first_data_indices[1] = i
-                    break
-
-        if first_data_indices[1] is None:
-            first_data_indices[1] = default_final
-
-        noise_samples = []
-        for first_idx in range(first_data_indices[0], first_data_indices[1]):
-            if ((data_mapping[first_idx] != self.myo_data.invalid_map) and
-                    (data_mapping[first_idx] < len(second_myo_data.timestamps))):
-                first_emg   = [x[first_idx] for x in first_myo_data.emg]
-                sec_idx     = data_mapping[first_idx]
-                second_emg  = [x[sec_idx] for x in second_myo_data.emg]
-                noise_samples.append(first_emg + second_emg)
-
-        #
-        # Fit a noise model
-        #
-        noise_samples   = np.array(noise_samples)
-        self.noise_mean = np.mean(noise_samples, axis=0)
-        self.noise_cov  = np.cov(noise_samples, rowvar=False)
-
-        # Apply sixth-order digital butterworth lowpass filter with 50 Hz cutoff frequency to rectified signal (first)
-        fs              = 200
-        nyquist         = 0.5 * fs
-        cutoff          = 50
-        order           = 6
-        b, a            = butter(order, cutoff / nyquist, btype='lowpass')
-        noise_samples   = np.abs(noise_samples)
-        filt_data       = lfilter(b, a, noise_samples, axis=0)
-
-        self.smooth_avg  = np.mean(filt_data, axis=0)
-        self.smooth_std  = np.std(filt_data, axis=0)
-
-        self.worker_updates.modelReady.emit()
 
 
 class GesturePredictionWorker(QRunnable):
@@ -1139,7 +1005,6 @@ class GesturePredictionWorker(QRunnable):
                     desc_explain, video_player, enable_control_buttons, controls_start, controls_pause,
                     controls_stop, timer, close_prediction, min_duration, max_duration, on_prediction):
         """
-
         :param myo_data: A MyoData object containing all data collected from both Myo armband devices
         :param smooth_avg: The mean across EMG data channels (smoothed, rectified) for noisy/rest movement
         :param smooth_std: The standard deviation across EMG data channels (smoothed, rectified) for noisy/rest movement
@@ -1335,7 +1200,6 @@ class GesturePredictionWorker(QRunnable):
                 else:
                     idx -= 1
 
-            #self.very_first = first_start_idx
             new_emg_count   = first_end_idx - first_start_idx + 1
 
         # Add new emg\imu samples:
@@ -1486,9 +1350,6 @@ class GesturePredictionWorker(QRunnable):
                 if not self.running:
                     break
 
-                #
-                # Refine signal onset (using likelihood test)
-                #
 
                 # For debugging:
                 # emg_samples = np.array(self.emg_list)
@@ -1523,7 +1384,7 @@ class GesturePredictionWorker(QRunnable):
                                 acc_samp   = np.array(self.acc_list[best_start: best_end])
                                 gyro_samp  = np.array(self.gyro_list[best_start: best_end])
 
-                                # Avoid using magnetometer
+                                # Avoid using magnetometer (overfitting issue)
                                 # mag_samp   = np.array(self.mag_list[best_start: best_end])
                                 # combined_samples = [emg_samp, acc_samp, gyro_samp, mag_samp]
                                 combined_samples = [emg_samp, acc_samp, gyro_samp]
@@ -1538,12 +1399,13 @@ class GesturePredictionWorker(QRunnable):
                                 test_feat   = self.pred_model.feat_extractor.extract_feature_point(combined_samples).reshape(1, -1)
                             else:
                                 test_feat   = self.pred_model.feat_extractor.extract_feature_point(emg_samp).reshape(1, -1)
-                            pred = self.pred_model.perform_inference(test_feat, None)[0]
+
+                            prob_dist  = self.pred_model.get_class_probabilities(test_feat)[0]
+                            pred       = np.argmax(prob_dist)
 
 
                             if pred != self.rest_label:
-                                prob                        = self.pred_model.get_class_probabilities(test_feat)
-                                self.class_probabilities    = prob[0]
+                                self.class_probabilities    = prob_dist
                                 self.num_samples_used       = num_samples
                                 self.worker_event.onPrediction.emit()
 
@@ -1601,7 +1463,9 @@ class GesturePredictionWorker(QRunnable):
 
 
     def start_online_pred(self):
-        # Disable play/pause/stop buttons until it is safe
+        '''
+            Disable play/pause/stop buttons until it is safe
+        '''
         self.enable_control_buttons(False, False, False)
 
         # If any button click is still being processed

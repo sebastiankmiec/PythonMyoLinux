@@ -24,7 +24,6 @@ def joint_event_handler(emg_list, orient_w, orient_x, orient_y, orient_z,
 if __name__ == "__main__":
     device_1 = MyoDongle("/dev/ttyACM0")
     device_1.clear_state()
-    print("\n")
 
     myo_devices = device_1.discover_myo_devices()
     if len(myo_devices) > 0:
@@ -35,8 +34,9 @@ if __name__ == "__main__":
 
     #device_1.add_imu_handler()
     #device_1.add_emg_handler()
-    # device_1.enable_imu_readings()
-    # device_1.enable_emg_readings()
-    # device_1.add_joint_emg_imu_handler(joint_event_handler)
-    #
+    device_1.enable_imu_readings()
+    device_1.enable_emg_readings()
+    device_1.add_joint_emg_imu_handler(joint_event_handler)
+
     # device_1.scan_for_data_packets_conditional()
+    device_1.scan_for_data_packets(3)

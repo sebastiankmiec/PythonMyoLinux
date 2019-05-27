@@ -109,6 +109,7 @@ class TopLevel(QWidget):
         :param address: MAC address of connected Myo device
         """
         self.online_pred_tab.device_connected(address, rssi, battery_level)
+        self.online_training_tab.device_connected(address, rssi, battery_level)
 
     def on_device_disconnected(self, address):
         """
@@ -117,6 +118,7 @@ class TopLevel(QWidget):
         :param address: MAC address of disconnected Myo device
         """
         self.online_pred_tab.device_disconnected(address)
+        self.online_training_tab.device_disconnected(address)
 
     def on_tab_changed(self, value):
         """
