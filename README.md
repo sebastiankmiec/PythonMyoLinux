@@ -1,4 +1,4 @@
-# PythonMyoLinux (In Progress)
+# PythonMyoLinux
 This repository contains the following:
 1. A Python (3.5) package to collect sEMG and IMU measurements from Myo armband devices, featuring:
    1. An implementation of the Bluegiga API (BGAPI)
@@ -6,55 +6,65 @@ This repository contains the following:
       * Discover, and connect to devices
       * Search for and subscribe to available services
    3. Use of Myo specific commands
-  
-2. A GUI demonstration.
+
+&nbsp;
+
+2. A GUI demonstration
    1. Overall system
 ![image](https://drive.google.com/uc?export=view&id=1CFbHmwnm0IA9_GXoSFw-ZrEctcZWsA-7)
 
    2. GUI tabs 
       1. Data Collection
 ![image](https://drive.google.com/uc?export=view&id=1lmxhSv5R_esBc0aPiKkVMWWlAkicxfSe)
-      2. Online Prediction
+      2. Online Training
+![image](https://drive.google.com/uc?export=view&id=1VYAvod_qM05WB559Gb34QO3bI9qBqiNy)
+      3. Online Prediction
 ![image](https://drive.google.com/uc?export=view&id=1DPZr0h6TVz1ReXGmWc4n6xWbzO1Ghpv1)
+
+&nbsp;
 
 The GUI demonstration currently supports up to two Myo armband devices over a BLED112 Bluetooth dongle(s), and is intended to be used on a Linux distribution. 
 
-Currently, the GUI allows for collection of data with (crude) ground truth. In the future, this package will provide ground truth correction; as well as online training and testing.
+The GUI allows for collection of data with (crude) ground truth, as well as online training/testing. For refining of ground truth, and offline training/testing, please see the *NinaTools* respository.
+
+&nbsp;
 
 # Setup & Usage
-First perform the following
+First install the *pymyolinux* package
 ```
 git clone https://github.com/sebastiankmiec/PythonMyoLinux.git
 cd PythonMyoLinux
-conda create -n myo_env
-conda activate myo_env
-conda install -c conda-forge python=3.5
+pip install .
 ```
 
-#### 1. Python package demonstration
+&nbsp;
+
+#### 1. *Pymyolinux* package demonstration
 ```
-conda install pyserial
-python main.py
+conda install -c conda-forge pyserial -y
+python pymyolinux_example.py
 ```
+
+&nbsp;
 
 #### 2. GUI demonstration
-Preliminary setup
+Install remaining dependencies (first setup the *NinaTools* respository)
 ```
-pip install .
-conda install -c conda-forge pyqt ffmpeg 
-conda install -c conda-forge pyqtgraph
-python gui_demo/main.py
-```
-Distribution specific steps (for <b>CentOS 7 only</b>)
-```
-yum install gstreamer1.x86_64 gstreamer1-libav.x86_64 gstreamer1-plugins-bad-freeworld.x86_64 gstreamer1-plugins-good.x86_64 
-cp /lib64/gstreamer-1.0/* /path_to_miniconda/envs/myo_env/lib/gstreamer-1.0/
+conda install -c conda-forge/label/cf201901 pyqt=5.6.0 pyqtgraph=0.10.0 -y
 ```
 
-To finally run the GUI demonstration:
+Distribution specific steps (for <b>CentOS 7 only</b>), to allow video playback
 ```
-python gui_demo/main.py
+yum install gstreamer1.x86_64 gstreamer1-libav.x86_64 gstreamer1-plugins-bad-freeworld.x86_64 gstreamer1-plugins-good.x86_64 
+yes | cp /lib64/gstreamer-1.0/* /path_to_miniconda/envs/testnina/lib/gstreamer-1.0/
 ```
+
+To finally run the GUI demonstration
+```
+python gui_demo/gui_main.py
+```
+
+&nbsp;
 
 # References
 1. "Getting Started with Bluetooth Low Energy" by O'Reilly Media, Inc.
